@@ -1,0 +1,19 @@
+<resources>
+    <style name="Theme.MoonTV.TV" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/moon_green</item>
+        <item name="colorPrimaryVariant">@color/moon_green_dark</item>
+        <item name="colorSecondary">@color/moon_green</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">@color/moon_background</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+
+    <style name="Widget.MoonTV.TV.Button" parent="Widget.MaterialComponents.Button.OutlinedButton">
+        <item name="android:textColor">@color/white</item>
+        <item name="backgroundTint">@color/tv_button_background</item>
+        <item name="strokeColor">@color/tv_button_stroke</item>
+        <item name="strokeWidth">2dp</item>
+        <item name="rippleColor">@color/moon_green_dark</item>
+    </style>
+</resources>
