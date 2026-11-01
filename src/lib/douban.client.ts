@@ -506,6 +506,19 @@ export async function getDoubanCollection(
 ): Promise<DoubanResult> {
   const { proxyType, proxyUrl } = getDoubanProxyConfig();
 
+  if (proxyType === 'direct') {
+    const params = new URLSearchParams({
+      id: collectionId,
+      start: String(pageStart),
+      limit: String(pageLimit),
+    });
+    const response = await fetch(`/api/douban/collection?${params}`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    return response.json();
+  }
+
   const useTencentCDN = proxyType === 'cmliussss-cdn-tencent';
   const useAliCDN = proxyType === 'cmliussss-cdn-ali';
   const baseUrl = useTencentCDN

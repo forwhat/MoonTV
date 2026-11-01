@@ -11,8 +11,8 @@ android {
         applicationId = "com.moontv.android"
         minSdk = 24
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.2.1"
+        versionCode = 14
+        versionName = "0.4.2"
     }
 
     buildTypes {
@@ -38,6 +38,8 @@ android {
         buildConfig = true
         viewBinding = true
     }
+
+    sourceSets.getByName("main").java.srcDir("../vendor/upnpcast/src/main/java")
 }
 
 dependencies {
@@ -46,8 +48,12 @@ dependencies {
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.webkit:webkit:1.13.0")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("com.google.android.material:material:1.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
 
-    implementation("com.github.yinnho:UPnPCast:v1.3.0")
+
+    testImplementation("junit:junit:4.13.2")
 }

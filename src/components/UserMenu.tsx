@@ -5,9 +5,11 @@
 import {
   Check,
   ChevronDown,
+  Cloud,
   ExternalLink,
   KeyRound,
   LogOut,
+  RefreshCw,
   Settings,
   Shield,
   User,
@@ -33,6 +35,14 @@ export const UserMenu: React.FC = () => {
   const router = useRouter();
   const pathname = usePathname();
   const { startLoading } = useNavigationLoading();
+  const isAndroidLocalFirst =
+    typeof window !== 'undefined' &&
+    Boolean((window as any).RUNTIME_CONFIG?.ANDROID_LOCAL_FIRST);
+  const isAndroidLocalMode =
+    isAndroidLocalFirst &&
+    (window as any).RUNTIME_CONFIG?.ANDROID_MODE === 'local';
+  const isAndroidApp =
+    typeof window !== 'undefined' && Boolean(window.MoonTVNative);
   const [isOpen, setIsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
@@ -142,10 +152,10 @@ export const UserMenu: React.FC = () => {
   };
 
   useEffect(() => {
-    if (isSettingsOpen) {
+    if (isSettingsOpen && isPrivileged && !isAndroidLocalMode) {
       fetchTvboxConfig();
     }
-  }, [isSettingsOpen]);
+  }, [isAndroidLocalMode, isPrivileged, isSettingsOpen]);
 
   // 确保组件已挂载
   useEffect(() => {
@@ -336,6 +346,7 @@ export const UserMenu: React.FC = () => {
       setIsOpen(false);
       return;
     }
+    setIsOpen(false);
     startLoading();
     router.push('/admin');
   };
@@ -402,6 +413,24 @@ export const UserMenu: React.FC = () => {
   const handleSettings = () => {
     setIsOpen(false);
     setIsSettingsOpen(true);
+  };
+
+  const handleRuntimeSettings = () => {
+    setIsOpen(false);
+    window.MoonTVNative?.postMessage(
+      JSON.stringify({ version: 1, type: 'action', action: 'open-settings' })
+    );
+  };
+
+  const handleReload = () => {
+    setIsOpen(false);
+    if (window.MoonTVNative) {
+      window.MoonTVNative.postMessage(
+        JSON.stringify({ version: 1, type: 'action', action: 'reload' })
+      );
+    } else {
+      window.location.reload();
+    }
   };
 
   const handleCloseSettings = () => {
@@ -560,7 +589,9 @@ export const UserMenu: React.FC = () => {
 
   // 检查是否显示管理面板按钮
   const showAdminPanel =
-    authInfo?.role === 'owner' || authInfo?.role === 'admin';
+    isAndroidLocalMode ||
+    authInfo?.role === 'owner' ||
+    authInfo?.role === 'admin';
 
   // 检查是否显示修改密码按钮
   const showChangePassword =
@@ -633,6 +664,26 @@ export const UserMenu: React.FC = () => {
             <span className='font-medium'>设置</span>
           </button>
 
+          {isAndroidApp && (
+            <button
+              onClick={handleRuntimeSettings}
+              className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm'
+            >
+              <Cloud className='w-4 h-4 text-gray-500 dark:text-gray-400' />
+              <span className='font-medium'>运行模式</span>
+            </button>
+          )}
+
+          {isAndroidApp && (
+            <button
+              onClick={handleReload}
+              className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm'
+            >
+              <RefreshCw className='w-4 h-4 text-gray-500 dark:text-gray-400' />
+              <span className='font-medium'>重新加载</span>
+            </button>
+          )}
+
           {/* 管理面板按钮 */}
           {showAdminPanel && (
             <button
@@ -659,13 +710,15 @@ export const UserMenu: React.FC = () => {
           <div className='my-1 border-t border-gray-200 dark:border-gray-700'></div>
 
           {/* 登出按钮 */}
-          <button
-            onClick={handleLogout}
-            className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-sm'
-          >
-            <LogOut className='w-4 h-4' />
-            <span className='font-medium'>登出</span>
-          </button>
+          {!isAndroidLocalMode && (
+            <button
+              onClick={handleLogout}
+              className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-sm'
+            >
+              <LogOut className='w-4 h-4' />
+              <span className='font-medium'>登出</span>
+            </button>
+          )}
 
           {/* 分割线 */}
           <div className='my-1 border-t border-gray-200 dark:border-gray-700'></div>

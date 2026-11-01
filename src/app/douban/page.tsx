@@ -7,10 +7,7 @@ import { Suspense } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { GetBangumiCalendarData } from '@/lib/bangumi.client';
-import {
-  getDoubanCategories,
-  getDoubanRecommends,
-} from '@/lib/douban.client';
+import { getDoubanCategories, getDoubanRecommends } from '@/lib/douban.client';
 import { DoubanItem, DoubanResult } from '@/lib/types';
 
 import DoubanCardSkeleton from '@/components/DoubanCardSkeleton';
@@ -25,6 +22,7 @@ function DoubanPageClient() {
   const [currentPage, setCurrentPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [selectorsReady, setSelectorsReady] = useState(false);
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadingRef = useRef<HTMLDivElement>(null);
@@ -184,7 +182,7 @@ function DoubanPageClient() {
         snapshot1.selectedWeekday === snapshot2.selectedWeekday &&
         snapshot1.currentPage === snapshot2.currentPage &&
         JSON.stringify(snapshot1.multiLevelSelection) ===
-        JSON.stringify(snapshot2.multiLevelSelection)
+          JSON.stringify(snapshot2.multiLevelSelection)
       );
     },
     []
@@ -237,8 +235,8 @@ function DoubanPageClient() {
           primarySelection === '高分'
             ? 'S'
             : primarySelection === '最新'
-              ? 'R'
-              : '',
+            ? 'R'
+            : '',
         label: multiLevelValues.label ? (multiLevelValues.label as string) : '',
       }),
     [type, multiLevelValues, primarySelection]
@@ -258,6 +256,7 @@ function DoubanPageClient() {
 
     try {
       setLoading(true);
+      setLoadError('');
       // 确保在加载初始数据时重置页面状态
       setDoubanData([]);
       setCurrentPage(0);
@@ -357,6 +356,10 @@ function DoubanPageClient() {
       }
     } catch (err) {
       console.error(err);
+      setHasMore(false);
+      setLoadError(
+        err instanceof Error ? err.message : '内容加载失败，请稍后重试'
+      );
       setLoading(false); // 发生错误时总是停止loading状态
     }
   }, [
@@ -418,6 +421,7 @@ function DoubanPageClient() {
 
         try {
           setIsLoadingMore(true);
+          setLoadError('');
 
           let data: DoubanResult;
           if (isTagPage) {
@@ -502,6 +506,10 @@ function DoubanPageClient() {
           }
         } catch (err) {
           console.error(err);
+          setHasMore(false);
+          setLoadError(
+            err instanceof Error ? err.message : '加载更多失败，请稍后重试'
+          );
         } finally {
           setIsLoadingMore(false);
         }
@@ -644,16 +652,16 @@ function DoubanPageClient() {
     return type === 'movie'
       ? '电影'
       : type === 'tv'
-        ? '电视剧'
-        : type === 'anime'
-          ? '动漫'
-          : type === 'show'
-            ? '综艺'
-            : type === 'short'
-              ? '短剧'
-              : type === 'doc'
-                ? '纪录片'
-                : '自定义';
+      ? '电视剧'
+      : type === 'anime'
+      ? '动漫'
+      : type === 'show'
+      ? '综艺'
+      : type === 'short'
+      ? '短剧'
+      : type === 'doc'
+      ? '纪录片'
+      : '自定义';
   };
 
   const getPageDescription = () => {
@@ -696,9 +704,7 @@ function DoubanPageClient() {
           {/* 选择器组件 */}
           <div className='bg-white/60 dark:bg-gray-800/40 rounded-2xl p-4 sm:p-6 border border-gray-200/30 dark:border-gray-700/30 backdrop-blur-sm'>
             <DoubanSelector
-              type={
-                type as 'movie' | 'tv' | 'show' | 'anime' | 'short' | 'doc'
-              }
+              type={type as 'movie' | 'tv' | 'show' | 'anime' | 'short' | 'doc'}
               primarySelection={primarySelection}
               secondarySelection={secondarySelection}
               onPrimaryChange={handlePrimaryChange}
@@ -715,24 +721,24 @@ function DoubanPageClient() {
           <div className='justify-start grid grid-cols-3 gap-x-2 gap-y-12 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))] sm:gap-x-8 sm:gap-y-20'>
             {loading || !selectorsReady
               ? // 显示骨架屏
-              skeletonData.map((index) => <DoubanCardSkeleton key={index} />)
+                skeletonData.map((index) => <DoubanCardSkeleton key={index} />)
               : // 显示实际数据
-              doubanData.map((item, index) => (
-                <div key={`${item.title}-${index}`} className='w-full'>
-                  <VideoCard
-                    from='douban'
-                    title={item.title}
-                    poster={item.poster}
-                    douban_id={Number(item.id)}
-                    rate={item.rate}
-                    year={item.year}
-                    type={type === 'movie' ? 'movie' : ''} // 电影类型严格控制，tv 不控
-                    isBangumi={
-                      type === 'anime' && primarySelection === '每日放送'
-                    }
-                  />
-                </div>
-              ))}
+                doubanData.map((item, index) => (
+                  <div key={`${item.title}-${index}`} className='w-full'>
+                    <VideoCard
+                      from='douban'
+                      title={item.title}
+                      poster={item.poster}
+                      douban_id={Number(item.id)}
+                      rate={item.rate}
+                      year={item.year}
+                      type={type === 'movie' ? 'movie' : ''} // 电影类型严格控制，tv 不控
+                      isBangumi={
+                        type === 'anime' && primarySelection === '每日放送'
+                      }
+                    />
+                  </div>
+                ))}
           </div>
 
           {/* 加载更多指示器 */}
@@ -762,7 +768,20 @@ function DoubanPageClient() {
           )}
 
           {/* 空状态 */}
-          {!loading && doubanData.length === 0 && (
+          {!loading && loadError && (
+            <div className='flex flex-col items-center gap-3 py-10 text-center text-gray-500'>
+              <span>{loadError}</span>
+              <button
+                type='button'
+                onClick={() => void loadInitialData()}
+                className='rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-500'
+              >
+                重新加载
+              </button>
+            </div>
+          )}
+
+          {!loading && !loadError && doubanData.length === 0 && (
             <div className='text-center text-gray-500 py-8'>暂无相关内容</div>
           )}
         </div>
