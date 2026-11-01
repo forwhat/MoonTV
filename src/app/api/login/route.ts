@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
+import { getLoginRedirect } from '@/lib/login-redirect';
 
 export const runtime = 'edge';
 
@@ -79,14 +80,46 @@ function authCookieOptions(req: NextRequest, expires: Date) {
 }
 
 export async function POST(req: NextRequest) {
+  const contentType = req.headers.get('content-type') || '';
+  const isForm =
+    contentType.includes('application/x-www-form-urlencoded') ||
+    contentType.includes('multipart/form-data');
+  let redirect = '/';
+  // Native POST must work before hydration or when the TV cannot load JS.
+  // JSON callers retain their existing response and cookie contract.
+  const respond = (body: { ok?: boolean; error?: string }, status = 200) => {
+    if (!isForm) return NextResponse.json(body, { status });
+    const target = new URL(redirect, 'https://moontv.invalid');
+    if (status >= 400) {
+      target.pathname = '/login';
+      target.search = '';
+      target.searchParams.set(
+        'error',
+        status < 500 ? 'invalid_credentials' : 'server_error'
+      );
+      target.searchParams.set('redirect', redirect);
+    }
+    // Relative Location preserves the public origin behind reverse proxies.
+    return new NextResponse(null, {
+      status: 303,
+      headers: {
+        Location: target.pathname + target.search + target.hash,
+        'Cache-Control': 'no-store',
+      },
+    });
+  };
   try {
+    const credentials = isForm
+      ? Object.fromEntries(await req.formData())
+      : await req.json();
+    redirect = getLoginRedirect(credentials.redirect);
     // 本地 / localStorage 模式——仅校验固定密码
     if (STORAGE_TYPE === 'localstorage') {
       const envPassword = process.env.PASSWORD;
 
       // 未配置 PASSWORD 时直接放行
       if (!envPassword) {
-        const response = NextResponse.json({ ok: true });
+        const response = respond({ ok: true });
 
         // 清除可能存在的认证cookie
         response.cookies.set('auth', '', authCookieOptions(req, new Date(0)));
@@ -94,20 +127,17 @@ export async function POST(req: NextRequest) {
         return response;
       }
 
-      const { password } = await req.json();
+      const { password } = credentials;
       if (typeof password !== 'string') {
-        return NextResponse.json({ error: '密码不能为空' }, { status: 400 });
+        return respond({ error: '密码不能为空' }, 400);
       }
 
       if (password !== envPassword) {
-        return NextResponse.json(
-          { ok: false, error: '密码错误' },
-          { status: 401 }
-        );
+        return respond({ ok: false, error: '密码错误' }, 401);
       }
 
       // 验证成功，设置认证cookie
-      const response = NextResponse.json({ ok: true });
+      const response = respond({ ok: true });
       const cookieValue = await generateAuthCookie(
         undefined,
         password,
@@ -127,13 +157,13 @@ export async function POST(req: NextRequest) {
     }
 
     // 数据库 / redis 模式——校验用户名并尝试连接数据库
-    const { username, password } = await req.json();
+    const { username, password } = credentials;
 
     if (!username || typeof username !== 'string') {
-      return NextResponse.json({ error: '用户名不能为空' }, { status: 400 });
+      return respond({ error: '用户名不能为空' }, 400);
     }
     if (!password || typeof password !== 'string') {
-      return NextResponse.json({ error: '密码不能为空' }, { status: 400 });
+      return respond({ error: '密码不能为空' }, 400);
     }
 
     // 可能是站长，直接读环境变量
@@ -142,7 +172,7 @@ export async function POST(req: NextRequest) {
       password === process.env.PASSWORD
     ) {
       // 验证成功，设置认证cookie
-      const response = NextResponse.json({ ok: true });
+      const response = respond({ ok: true });
       const cookieValue = await generateAuthCookie(
         username,
         password,
@@ -160,27 +190,24 @@ export async function POST(req: NextRequest) {
 
       return response;
     } else if (username === process.env.USERNAME) {
-      return NextResponse.json({ error: '用户名或密码错误' }, { status: 401 });
+      return respond({ error: '用户名或密码错误' }, 401);
     }
 
     const config = await getConfig();
     const user = config.UserConfig.Users.find((u) => u.username === username);
     if (user && user.banned) {
-      return NextResponse.json({ error: '用户被封禁' }, { status: 401 });
+      return respond({ error: '用户被封禁' }, 401);
     }
 
     // 校验用户密码
     try {
       const pass = await db.verifyUser(username, password);
       if (!pass) {
-        return NextResponse.json(
-          { error: '用户名或密码错误' },
-          { status: 401 }
-        );
+        return respond({ error: '用户名或密码错误' }, 401);
       }
 
       // 验证成功，设置认证cookie
-      const response = NextResponse.json({ ok: true });
+      const response = respond({ ok: true });
       const cookieValue = await generateAuthCookie(
         username,
         password,
@@ -199,10 +226,10 @@ export async function POST(req: NextRequest) {
       return response;
     } catch (err) {
       console.error('数据库验证失败', err);
-      return NextResponse.json({ error: '数据库错误' }, { status: 500 });
+      return respond({ error: '数据库错误' }, 500);
     }
   } catch (error) {
     console.error('登录接口异常', error);
-    return NextResponse.json({ error: '服务器错误' }, { status: 500 });
+    return respond({ error: '服务器错误' }, 500);
   }
 }
