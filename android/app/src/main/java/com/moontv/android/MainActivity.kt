@@ -13,9 +13,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -149,6 +151,17 @@ class MainActivity : AppCompatActivity() {
         binding.webView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                 binding.pageProgress.isVisible = newProgress in 1..99
+            }
+
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                if (consoleMessage?.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                    Log.e(
+                        TAG,
+                        "WebView ${consoleMessage.sourceId()}:${consoleMessage.lineNumber()} " +
+                            consoleMessage.message(),
+                    )
+                }
+                return super.onConsoleMessage(consoleMessage)
             }
 
             override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
@@ -305,10 +318,17 @@ class MainActivity : AppCompatActivity() {
             .setView(input)
             .setCancelable(!required)
             .setNegativeButton(if (required) null else "取消", null)
+            .setNeutralButton(if (required) null else "清理缓存", null)
             .setPositiveButton("保存", null)
             .create()
 
         dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
+                binding.webView.clearCache(true)
+                binding.webView.reload()
+                Toast.makeText(this, "网页缓存已清理", Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+            }
             dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val normalized = normalizeServerUrl(input.text.toString())
                 if (normalized == null) {
@@ -328,6 +348,10 @@ class MainActivity : AppCompatActivity() {
         val origin = originOf(uri) ?: return
         configuredOrigin = origin
         installMessageBridge(origin)
+        // APK 只是 MoonTV 网页的原生容器，离线 HTTP 缓存没有价值。服务端重新部署后
+        // 旧 HTML 与新 chunk 混用会让 Next.js 长时间停在 Suspense，最终显示客户端异常。
+        // 清理 HTTP 缓存不会删除 Cookie、localStorage 或视频 Cache Storage。
+        binding.webView.clearCache(true)
         binding.webView.loadUrl(serverUrl)
     }
 
@@ -603,5 +627,6 @@ class MainActivity : AppCompatActivity() {
         private const val BRIDGE_NAME = "MoonTVNative"
         private const val BRIDGE_VERSION = 1
         private const val ANDROID_USER_AGENT_MARKER = "MoonTVAndroid"
+        private const val TAG = "MoonTVWebView"
     }
 }
