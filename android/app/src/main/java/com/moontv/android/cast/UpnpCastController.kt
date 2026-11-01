@@ -1,9 +1,14 @@
 package com.moontv.android.cast
 
 import android.content.Context
+import android.util.Log
 import com.yinnho.upnpcast.CastOptions
 import com.yinnho.upnpcast.DLNACast
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 class UpnpCastController(context: Context) : DlnaController {
@@ -12,10 +17,20 @@ class UpnpCastController(context: Context) : DlnaController {
     }
 
     override suspend fun discover(timeoutMs: Long): List<DlnaDevice> = withContext(Dispatchers.IO) {
-        DLNACast.search(timeoutMs)
-            .filter { it.isTV }
+        val renderers = coroutineScope {
+            DLNACast.search(timeoutMs)
+                .map { device ->
+                    async {
+                        val isRenderer = device.isTV || DlnaRendererProbe.isRenderer(device.id)
+                        device.takeIf { isRenderer }
+                    }
+                }
+                .awaitAll()
+                .filterNotNull()
+        }
+        renderers
             .distinctBy { it.id }
-            .map { DlnaDevice(it.id, it.name, it.address, it.isTV) }
+            .map { DlnaDevice(it.id, it.name, it.address, true) }
             .sortedBy { it.name.lowercase() }
     }
 
@@ -23,16 +38,30 @@ class UpnpCastController(context: Context) : DlnaController {
         withContext(Dispatchers.IO) {
             DLNACast.clearProgressCache()
             val target = DLNACast.Device(device.id, device.name, device.address, device.isTv)
-            val accepted = DLNACast.castToDevice(
-                device = target,
-                url = media.url,
-                title = media.title,
-                options = CastOptions(mimeType = guessMimeType(media.url)),
-            )
-            if (accepted && media.positionMs > 1_000) {
-                DLNACast.seek(media.positionMs)
+            for ((index, profile) in DlnaCastProfiles.forUrl(media.url).withIndex()) {
+                if (index > 0) {
+                    runCatching { DLNACast.stop() }
+                    delay(COMPATIBILITY_RETRY_DELAY_MS)
+                }
+
+                val accepted = DLNACast.castToDevice(
+                    device = target,
+                    url = media.url,
+                    title = media.title,
+                    options = CastOptions(
+                        metadata = if (profile.emptyMetadata) "" else null,
+                        mimeType = profile.mimeType,
+                    ),
+                )
+                Log.i(TAG, "DLNA cast profile ${profile.name}: accepted=$accepted")
+                if (accepted) {
+                    if (media.positionMs > 1_000) {
+                        DLNACast.seek(media.positionMs)
+                    }
+                    return@withContext true
+                }
             }
-            accepted
+            false
         }
 
     override suspend fun play(): Boolean = withContext(Dispatchers.IO) { DLNACast.play() }
@@ -65,15 +94,8 @@ class UpnpCastController(context: Context) : DlnaController {
         DLNACast.cleanup()
     }
 
-    private fun guessMimeType(url: String): String? {
-        val path = url.substringBefore('?').substringBefore('#').lowercase()
-        return when {
-            path.endsWith(".m3u8") -> "application/vnd.apple.mpegurl"
-            path.endsWith(".mp4") -> "video/mp4"
-            path.endsWith(".mkv") -> "video/x-matroska"
-            path.endsWith(".webm") -> "video/webm"
-            path.endsWith(".mp3") -> "audio/mpeg"
-            else -> null
-        }
+    private companion object {
+        const val TAG = "UpnpCastController"
+        const val COMPATIBILITY_RETRY_DELAY_MS = 250L
     }
 }

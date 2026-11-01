@@ -79,7 +79,9 @@ class DlnaSessionService : Service() {
 
         serviceScope.launch {
             val result = runCatching {
-                check(controller.cast(device, media)) { "电视拒绝了播放请求" }
+                check(controller.cast(device, media)) {
+                    "无法通过 DLNA 启动播放；已尝试该媒体适用的标准和兼容模式"
+                }
             }
             if (result.isSuccess) {
                 mutableState.update {

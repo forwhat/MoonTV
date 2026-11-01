@@ -11,8 +11,8 @@ android {
         applicationId = "com.moontv.android"
         minSdk = 24
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.2.1"
+        versionCode = 6
+        versionName = "0.2.3"
     }
 
     buildTypes {
@@ -50,4 +50,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
     implementation("com.github.yinnho:UPnPCast:v1.3.0")
+
+    testImplementation("junit:junit:4.13.2")
 }
