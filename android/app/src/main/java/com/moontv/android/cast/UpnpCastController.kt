@@ -33,7 +33,10 @@ class UpnpCastController(context: Context) : DlnaController {
             DLNACast.clearProgressCache()
             val target = DLNACast.Device(device.id, device.name, device.address, device.isTv)
             var attemptIndex = 0
-            for (candidateUrl in HlsVariantResolver.candidates(media.url)) {
+            val candidateUrls = mutableListOf(media.url)
+            var candidateIndex = 0
+            while (candidateIndex < candidateUrls.size) {
+                val candidateUrl = candidateUrls[candidateIndex]
                 for (profile in DlnaCastProfiles.forUrl(candidateUrl)) {
                     if (attemptIndex > 0) {
                         runCatching { DLNACast.stop() }
@@ -65,6 +68,10 @@ class UpnpCastController(context: Context) : DlnaController {
                     }
                     attemptIndex += 1
                 }
+                if (candidateIndex == 0) {
+                    HlsVariantResolver.resolveVariant(media.url)?.let(candidateUrls::add)
+                }
+                candidateIndex += 1
             }
             false
         }

@@ -14,11 +14,10 @@ internal object HlsVariantResolver {
     private const val READ_TIMEOUT_MS = 6_000
     private const val MAX_PLAYLIST_BYTES = 1024 * 1024
 
-    fun candidates(url: String): List<String> {
-        if (!isHlsUrl(url)) return listOf(url)
-        val download = download(url) ?: return listOf(url)
-        val variant = selectVariant(download.finalUrl, download.body) ?: return listOf(url)
-        return listOf(url, variant).distinct()
+    fun resolveVariant(url: String): String? {
+        if (!isHlsUrl(url)) return null
+        val download = download(url) ?: return null
+        return selectVariant(download.finalUrl, download.body)?.takeIf { it != url }
     }
 
     internal fun selectVariant(baseUrl: String, playlist: String): String? {
