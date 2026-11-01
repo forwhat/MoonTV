@@ -6,3 +6,9 @@
 // “找不到模块或其对应的类型声明”。
 declare module '*.css';
 declare module '*.css?*';
+
+interface Window {
+  MoonTVNative?: {
+    postMessage(message: string): void;
+  };
+}

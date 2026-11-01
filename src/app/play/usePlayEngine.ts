@@ -108,6 +108,19 @@ export interface PlayPreviewState {
   image: string | null;
 }
 
+interface NativeCastState {
+  version: number;
+  type: 'cast-state';
+  active: boolean;
+  connecting: boolean;
+  url: string;
+  title: string;
+  position: number;
+  duration: number;
+  playbackState: string;
+  deviceName: string;
+}
+
 // 扩展 HTMLVideoElement 类型以支持 hls 属性
 declare global {
   interface HTMLVideoElement {
@@ -213,6 +226,17 @@ const LAST_CACHE_VIDEO_KEY = 'moontv:last-cache-video';
 /** 首次进入播放页时提示一次帮助入口 */
 const HELP_TIP_SEEN_KEY = 'moontv:help-tip-seen';
 
+function getPlaybackSaveIntervalMs(): number {
+  const configuredInterval =
+    typeof window !== 'undefined'
+      ? Number((window as any).RUNTIME_CONFIG?.PLAYBACK_SAVE_INTERVAL)
+      : 0;
+  if (configuredInterval > 0) return configuredInterval * 1000;
+  return (
+    getDefaultPlaybackSaveInterval(process.env.NEXT_PUBLIC_STORAGE_TYPE) * 1000
+  );
+}
+
 function readLastCacheVideoKey(): string | null {
   try {
     return window.sessionStorage.getItem(LAST_CACHE_VIDEO_KEY);
@@ -272,6 +296,9 @@ function buildCacheTooltip(
  */
 export function usePlayEngine() {
   const searchParams = useSearchParams();
+  const isMoonTVAndroid =
+    typeof navigator !== 'undefined' &&
+    navigator.userAgent.includes('MoonTVAndroid/');
 
   // -----------------------------------------------------------------------------
   // 状态变量（State）
@@ -690,6 +717,63 @@ export function usePlayEngine() {
   const [preview, setPreview] = useState<PlayPreviewState | null>(null);
   const lastDanmakuUrlRef = useRef<string>(''); // 上一次加载的弹幕 URL
   const pendingDanmakuVisibleRestoreRef = useRef<boolean | null>(null); // 切集后待恢复的弹幕可见状态
+  const nativeCastStateRef = useRef<NativeCastState | null>(null);
+
+  const postMediaToNative = () => {
+    const mediaUrl = currentVideoUrlRef.current || videoUrl;
+    if (!mediaUrl || typeof window === 'undefined' || !window.MoonTVNative) {
+      return false;
+    }
+    const player = artPlayerRef.current;
+    const episodeTitle =
+      detailRef.current?.episodes_titles?.[currentEpisodeIndexRef.current] ||
+      ((detailRef.current?.episodes.length || 0) > 1
+        ? `第 ${currentEpisodeIndexRef.current + 1} 集`
+        : '');
+    const title = episodeTitle
+      ? `${videoTitleRef.current} - ${episodeTitle}`
+      : videoTitleRef.current;
+
+    window.MoonTVNative.postMessage(
+      JSON.stringify({
+        version: 1,
+        type: 'media',
+        url: mediaUrl,
+        title,
+        position: player?.currentTime || 0,
+        duration: player?.duration || 0,
+        paused: player?.paused ?? true,
+      })
+    );
+    return true;
+  };
+
+  const postNativeAction = (
+    action: 'discover' | 'open-settings'
+  ): boolean => {
+    if (typeof window === 'undefined' || !window.MoonTVNative) return false;
+    window.MoonTVNative.postMessage(
+      JSON.stringify({
+        version: 1,
+        type: 'action',
+        action,
+      })
+    );
+    return true;
+  };
+
+  useEffect(() => {
+    if (!isMoonTVAndroid) return;
+    postMediaToNative();
+    const timer = window.setInterval(postMediaToNative, 2000);
+    return () => window.clearInterval(timer);
+  }, [
+    isMoonTVAndroid,
+    videoUrl,
+    videoTitle,
+    currentEpisodeIndex,
+    detail,
+  ]);
 
   // ---- P1-5 / P1-6 相关 ----
   /** 当前 HLS 实例的错误恢复状态机（换源/重建时销毁重建） */
@@ -1961,10 +2045,8 @@ export function usePlayEngine() {
   // 播放进度保存
   // -----------------------------------------------------------------------------
 
-  // 保存播放进度
-  const saveCurrentPlayProgress = async () => {
+  const savePlayProgressAt = async (currentTime: number, duration: number) => {
     if (
-      !artPlayerRef.current ||
       !currentSourceRef.current ||
       !currentIdRef.current ||
       !videoTitleRef.current ||
@@ -1972,10 +2054,6 @@ export function usePlayEngine() {
     ) {
       return;
     }
-
-    const player = artPlayerRef.current;
-    const currentTime = player.currentTime || 0;
-    const duration = player.duration || 0;
 
     // 如果播放时间太短（少于5秒）或者视频时长无效，不保存
     if (currentTime < 1 || !duration) {
@@ -2007,6 +2085,74 @@ export function usePlayEngine() {
       console.error('保存播放进度失败:', err);
     }
   };
+
+  // 保存手机本地或电视端的最新播放进度
+  const saveCurrentPlayProgress = async () => {
+    const nativeState = nativeCastStateRef.current;
+    const useNativeProgress =
+      nativeState?.active &&
+      nativeState.url === (currentVideoUrlRef.current || videoUrl);
+    const player = artPlayerRef.current;
+    if (!player && !useNativeProgress) return;
+
+    const currentTime = useNativeProgress
+      ? nativeState.position
+      : player?.currentTime || 0;
+    const duration = useNativeProgress
+      ? nativeState.duration
+      : player?.duration || 0;
+    await savePlayProgressAt(currentTime, duration);
+  };
+
+  useEffect(() => {
+    const handleNativeState = (event: Event) => {
+      const state = (event as CustomEvent<NativeCastState>).detail;
+      if (!state || state.version !== 1 || state.type !== 'cast-state') return;
+
+      const previous = nativeCastStateRef.current;
+      nativeCastStateRef.current = state;
+      const mediaUrl = currentVideoUrlRef.current || videoUrl;
+      if (state.url !== mediaUrl) return;
+
+      if (state.active && artPlayerRef.current && !artPlayerRef.current.paused) {
+        artPlayerRef.current.pause();
+      }
+
+      const now = Date.now();
+      if (
+        state.active &&
+        state.position > 0 &&
+        state.duration > 0 &&
+        now - lastSaveTimeRef.current > getPlaybackSaveIntervalMs()
+      ) {
+        void savePlayProgressAt(state.position, state.duration);
+      }
+      if (
+        previous?.active &&
+        !state.active &&
+        state.position > 0 &&
+        state.duration > 0
+      ) {
+        void savePlayProgressAt(state.position, state.duration);
+      }
+    };
+
+    const handleNativeControl = (event: Event) => {
+      const detail = (event as CustomEvent<{ version: number; action: string }>)
+        .detail;
+      if (detail?.version !== 1) return;
+      if (detail.action === 'pause-local' && artPlayerRef.current) {
+        artPlayerRef.current.pause();
+      }
+    };
+
+    window.addEventListener('moontv-native-state', handleNativeState);
+    window.addEventListener('moontv-native-control', handleNativeControl);
+    return () => {
+      window.removeEventListener('moontv-native-state', handleNativeState);
+      window.removeEventListener('moontv-native-control', handleNativeControl);
+    };
+  }, [videoUrl, currentSource, currentId, currentEpisodeIndex, detail]);
 
   useEffect(() => {
     // 页面即将卸载时保存播放进度和清理资源
@@ -3073,6 +3219,21 @@ export function usePlayEngine() {
               return '';
             },
           },
+          ...(isMoonTVAndroid
+            ? [
+                {
+                  name: '应用服务地址',
+                  html: '应用服务地址',
+                  tooltip: '修改',
+                  icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M3 5h10v2H3V5Zm12 0h6v2h-6V5Zm-2-2h2v6h-2V3ZM3 11h2v2H3v-2Zm4 0h14v2H7v-2ZM5 9h2v6H5V9ZM3 17h10v2H3v-2Zm12 0h6v2h-6v-2Zm-2-2h2v6h-2v-6Z"/></svg>',
+                  onClick() {
+                    return postNativeAction('open-settings')
+                      ? '已打开'
+                      : '应用服务尚未就绪';
+                  },
+                },
+              ]
+            : []),
           {
             name: '操作说明',
             html: '操作说明',
@@ -3101,6 +3262,27 @@ export function usePlayEngine() {
               handleNextEpisode();
             },
           },
+          ...(isMoonTVAndroid
+            ? [
+                {
+                  name: 'dlna-cast',
+                  position: 'right',
+                  index: 20,
+                  html: '<i class="art-icon flex"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1 18v3h3a3 3 0 0 0-3-3Zm0-4v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7Zm2-11a2 2 0 0 0-2 2v5h2V5h18v14h-9v2h9a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H3Zm-2 7v2a9 9 0 0 1 9 9h2c0-6.08-4.92-11-11-11Z" fill="currentColor"/></svg></i>',
+                  tooltip: 'DLNA 投屏',
+                  click() {
+                    postMediaToNative();
+                    if (!postNativeAction('discover')) {
+                      pushPlayerNotice(
+                        artPlayerRef.current,
+                        '投屏服务尚未就绪，请稍后重试',
+                        { key: 'native-cast', durationMs: 5000 }
+                      );
+                    }
+                  },
+                },
+              ]
+            : []),
         ],
       });
 
@@ -3195,6 +3377,14 @@ export function usePlayEngine() {
 
       // 监听播放状态变化，控制 Wake Lock
       artPlayerRef.current.on('play', () => {
+        const nativeState = nativeCastStateRef.current;
+        if (
+          nativeState?.active &&
+          nativeState.url === currentVideoUrlRef.current
+        ) {
+          artPlayerRef.current.pause();
+          return;
+        }
         requestWakeLock();
         syncCacheBandwidth(true);
       });
@@ -3202,6 +3392,13 @@ export function usePlayEngine() {
       artPlayerRef.current.on('pause', () => {
         releaseWakeLock();
         saveCurrentPlayProgress();
+
+        if (
+          nativeCastStateRef.current?.active &&
+          nativeCastStateRef.current.url === currentVideoUrlRef.current
+        ) {
+          return;
+        }
 
         // 暂停是预缓存的"黄金窗口"：播放不再抢带宽，缓存应当全速继续。
         // 1) 解除 stall 让路。否则若用户正好在卡顿时按暂停，video:playing
@@ -3375,16 +3572,7 @@ export function usePlayEngine() {
         // —— 播放进度自动保存 ——
         // 间隔优先读取站点配置（RUNTIME_CONFIG.PLAYBACK_SAVE_INTERVAL，单位秒），
         // 未配置时回退到存储类型默认值（Upstash 20s，其余 5s）
-        const configuredInterval =
-          typeof window !== 'undefined'
-            ? Number((window as any).RUNTIME_CONFIG?.PLAYBACK_SAVE_INTERVAL)
-            : 0;
-        const saveInterval =
-          configuredInterval > 0
-            ? configuredInterval * 1000
-            : getDefaultPlaybackSaveInterval(
-                process.env.NEXT_PUBLIC_STORAGE_TYPE
-              ) * 1000;
+        const saveInterval = getPlaybackSaveIntervalMs();
         if (now - lastSaveTimeRef.current > saveInterval) {
           saveCurrentPlayProgress();
           lastSaveTimeRef.current = now;
