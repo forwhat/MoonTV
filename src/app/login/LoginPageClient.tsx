@@ -5,6 +5,7 @@
 import { AlertCircle, CheckCircle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+import { getLoginRedirect } from '@/lib/login-redirect';
 import { checkForUpdates, CURRENT_VERSION, UpdateStatus } from '@/lib/version';
 
 import { useSite } from '@/components/SiteProvider';
@@ -67,6 +68,8 @@ function VersionDisplay() {
 interface LoginPageClientProps {
   initialShouldAskUsername: boolean;
   initialEnableRegister: boolean;
+  initialError: string | null;
+  initialRedirect: string;
 }
 
 const AUTH_COOKIE_WAIT_TIMEOUT_MS = 3000;
@@ -92,20 +95,19 @@ function finishAuthentication() {
   const requestedRedirect = new URLSearchParams(window.location.search).get(
     'redirect'
   );
-  const redirect =
-    requestedRedirect?.startsWith('/') && !requestedRedirect.startsWith('//')
-      ? requestedRedirect
-      : '/';
+  const redirect = getLoginRedirect(requestedRedirect);
   window.location.replace(redirect);
 }
 
 function LoginPageClient({
   initialShouldAskUsername,
   initialEnableRegister,
+  initialError,
+  initialRedirect,
 }: LoginPageClientProps) {
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError);
   const [loading, setLoading] = useState(false);
   const shouldAskUsername = initialShouldAskUsername;
   const [enableRegister, setEnableRegister] = useState(initialEnableRegister);
@@ -219,7 +221,13 @@ function LoginPageClient({
         <h1 className='text-green-600 tracking-tight text-center text-3xl font-extrabold mb-8 bg-clip-text drop-shadow-sm'>
           {siteName}
         </h1>
-        <form onSubmit={handleSubmit} className='space-y-8'>
+        <form
+          action='/api/login'
+          method='post'
+          onSubmit={handleSubmit}
+          className='space-y-8'
+        >
+          <input type='hidden' name='redirect' value={initialRedirect} />
           {shouldAskUsername && (
             <div>
               <label htmlFor='username' className='sr-only'>
