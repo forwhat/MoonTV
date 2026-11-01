@@ -3,9 +3,9 @@
 'use client';
 
 import { AlertCircle, CheckCircle } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
-import { getLoginRedirect } from '@/lib/login-redirect';
 import { checkForUpdates, CURRENT_VERSION, UpdateStatus } from '@/lib/version';
 
 import { useSite } from '@/components/SiteProvider';
@@ -72,39 +72,13 @@ interface LoginPageClientProps {
   initialRedirect: string;
 }
 
-const AUTH_COOKIE_WAIT_TIMEOUT_MS = 3000;
-
-function hasAuthCookie() {
-  return document.cookie
-    .split(';')
-    .some((cookie) => cookie.trim().startsWith('auth='));
-}
-
-async function waitForAuthCookie() {
-  const deadline = Date.now() + AUTH_COOKIE_WAIT_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (hasAuthCookie()) return true;
-    await new Promise((resolve) => window.setTimeout(resolve, 50));
-  }
-  return hasAuthCookie();
-}
-
-function finishAuthentication() {
-  (window as any).MoonTVCookieBridge?.flush?.();
-
-  const requestedRedirect = new URLSearchParams(window.location.search).get(
-    'redirect'
-  );
-  const redirect = getLoginRedirect(requestedRedirect);
-  window.location.replace(redirect);
-}
-
 function LoginPageClient({
   initialShouldAskUsername,
   initialEnableRegister,
   initialError,
   initialRedirect,
 }: LoginPageClientProps) {
+  const router = useRouter();
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
   const [error, setError] = useState<string | null>(initialError);
@@ -125,7 +99,7 @@ function LoginPageClient({
   }, []);
 
   const readCredentials = () => ({
-    username: (usernameRef.current?.value ?? username).trim(),
+    username: usernameRef.current?.value ?? username,
     password: passwordRef.current?.value ?? password,
   });
 
@@ -158,11 +132,7 @@ function LoginPageClient({
       });
 
       if (res.ok) {
-        if (!(await waitForAuthCookie())) {
-          setError('登录成功，但登录凭证未保存，请重试');
-          return;
-        }
-        finishAuthentication();
+        router.replace(initialRedirect);
       } else if (res.status === 401) {
         setError('密码错误');
       } else {
@@ -196,11 +166,7 @@ function LoginPageClient({
       });
 
       if (res.ok) {
-        if (!(await waitForAuthCookie())) {
-          setError('注册成功，但登录凭证未保存，请重新登录');
-          return;
-        }
-        finishAuthentication();
+        router.replace(initialRedirect);
       } else {
         const data = await res.json().catch(() => ({}));
         setError(data.error ?? '服务器错误');
@@ -246,11 +212,6 @@ function LoginPageClient({
                 onChange={(e) => setUsername(e.target.value)}
                 onInput={(e) => setUsername(e.currentTarget.value)}
                 onBlur={(e) => setUsername(e.currentTarget.value)}
-                onKeyDown={(e) => {
-                  if (e.key !== 'Enter') return;
-                  e.preventDefault();
-                  passwordRef.current?.focus();
-                }}
               />
             </div>
           )}
@@ -272,11 +233,6 @@ function LoginPageClient({
               onChange={(e) => setPassword(e.target.value)}
               onInput={(e) => setPassword(e.currentTarget.value)}
               onBlur={(e) => setPassword(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                if (e.key !== 'Enter') return;
-                e.preventDefault();
-                e.currentTarget.form?.requestSubmit();
-              }}
             />
           </div>
 
