@@ -46,7 +46,11 @@ import {
   getWarmupConcurrency,
   shouldThrottlePrefetch,
 } from '@/lib/prefetch-scheduler';
-import { matchesFullSearchTitle } from '@/lib/search-title';
+import {
+  matchesFullSearchTitle,
+  matchesSearchYear,
+  resolveSearchYear,
+} from '@/lib/search-title';
 import { SearchResult } from '@/lib/types';
 import {
   getRequestTimeout,
@@ -1312,9 +1316,7 @@ export function usePlayEngine() {
                   const filteredResults: SearchResult[] =
                     data.pageResults.filter((r: SearchResult) => {
                       const titleMatch = matchesFullSearchTitle(r.title, query);
-                      const yearMatch = targetYear
-                        ? r.year.toLowerCase() === targetYear.toLowerCase()
-                        : true;
+                      const yearMatch = matchesSearchYear(r.year, targetYear);
                       const typeMatch = searchType
                         ? (searchType === 'tv' && r.episodes.length > 1) ||
                           (searchType === 'movie' && r.episodes.length === 1)
@@ -1358,13 +1360,22 @@ export function usePlayEngine() {
      * 初始化播放数据
      */
     function initDetail(detailData: SearchResult) {
+      const canonicalYear = resolveSearchYear(
+        detailData.year,
+        videoYearRef.current
+      );
+      const canonicalDetail = canonicalYear
+        ? { ...detailData, year: canonicalYear }
+        : detailData;
+
       setCurrentSource(detailData.source);
       setCurrentId(detailData.id);
-      setVideoYear(detailData.year);
+      videoYearRef.current = canonicalYear;
+      setVideoYear(canonicalYear);
       setVideoTitle(detailData.title || videoTitleRef.current);
       setVideoCover(detailData.poster);
       setVideoDoubanId(detailData.douban_id || 0);
-      setDetail(detailData);
+      setDetail(canonicalDetail);
 
       // 传入的起始集数超出本源可用集数范围时，直接定位到最后一集（而非回到第一集）。
       // 以 URL 的 ep 为准，避免依赖可能尚未写入的 state / 播放记录。
@@ -1388,7 +1399,11 @@ export function usePlayEngine() {
       const newUrl = new URL(window.location.href);
       newUrl.searchParams.set('source', detailData.source);
       newUrl.searchParams.set('id', detailData.id);
-      newUrl.searchParams.set('year', detailData.year);
+      if (canonicalYear) {
+        newUrl.searchParams.set('year', canonicalYear);
+      } else {
+        newUrl.searchParams.delete('year');
+      }
       newUrl.searchParams.set('title', detailData.title);
       newUrl.searchParams.delete('prefer');
       window.history.replaceState({}, '', newUrl.toString());
@@ -1819,6 +1834,14 @@ export function usePlayEngine() {
         return;
       }
 
+      const canonicalYear = resolveSearchYear(
+        newDetail.year,
+        videoYearRef.current
+      );
+      const canonicalDetail = canonicalYear
+        ? { ...newDetail, year: canonicalYear }
+        : newDetail;
+
       // 尝试跳转到当前正在播放的集数
       let targetIndex = currentEpisodeIndex;
 
@@ -1845,16 +1868,21 @@ export function usePlayEngine() {
       const newUrl = new URL(window.location.href);
       newUrl.searchParams.set('source', newSource);
       newUrl.searchParams.set('id', newId);
-      newUrl.searchParams.set('year', newDetail.year);
+      if (canonicalYear) {
+        newUrl.searchParams.set('year', canonicalYear);
+      } else {
+        newUrl.searchParams.delete('year');
+      }
       window.history.replaceState({}, '', newUrl.toString());
 
       setVideoTitle(newDetail.title || newTitle);
-      setVideoYear(newDetail.year);
+      videoYearRef.current = canonicalYear;
+      setVideoYear(canonicalYear);
       setVideoCover(newDetail.poster);
       setVideoDoubanId(newDetail.douban_id || 0);
       setCurrentSource(newSource);
       setCurrentId(newId);
-      setDetail(newDetail);
+      setDetail(canonicalDetail);
       setCurrentEpisodeIndex(targetIndex);
 
       // 设置一个短暂的延时，确保DOM已更新

@@ -16,6 +16,37 @@ export function matchesFullSearchTitle(title: string, query: string): boolean {
   );
 }
 
+const RELEASE_YEAR = /(?:19|20)\d{2}/;
+
+/** Only a real four-digit release year is safe to use as a cross-source filter. */
+export function normalizeSearchYear(value: unknown): string {
+  const match = String(value ?? '').match(RELEASE_YEAR);
+  return match?.[0] ?? '';
+}
+
+/**
+ * Sources frequently omit the year or return `unknown`. Missing metadata must
+ * not hide an otherwise matching source; two known, different years still do.
+ */
+export function matchesSearchYear(
+  candidate: unknown,
+  target: unknown
+): boolean {
+  const normalizedTarget = normalizeSearchYear(target);
+  if (!normalizedTarget) return true;
+
+  const normalizedCandidate = normalizeSearchYear(candidate);
+  return !normalizedCandidate || normalizedCandidate === normalizedTarget;
+}
+
+/** Keep the known canonical year when the selected source has no usable year. */
+export function resolveSearchYear(
+  candidate: unknown,
+  fallback: unknown
+): string {
+  return normalizeSearchYear(candidate) || normalizeSearchYear(fallback);
+}
+
 // Common sentence punctuation and separators interpreted specially by upstream engines.
 const SEARCH_TITLE_SEPARATORS =
   /[().,!?;:#&|/~\\\u3002\uff0c\u3001\uff01\uff1f\uff1b\uff1a\uff03\uff06\uff5c\uff0f\uff3c\uff5e\u301c\u2026]/;
