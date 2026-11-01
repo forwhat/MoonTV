@@ -1,1 +1,4 @@
-# MoonTV TV contains no reflected application classes.
+# Keep the native bridge callable after release minification.
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}

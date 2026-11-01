@@ -3,7 +3,6 @@
 'use client';
 
 import { AlertCircle, CheckCircle } from 'lucide-react';
-import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import { checkForUpdates, CURRENT_VERSION, UpdateStatus } from '@/lib/version';
@@ -70,11 +69,40 @@ interface LoginPageClientProps {
   initialEnableRegister: boolean;
 }
 
+const AUTH_COOKIE_WAIT_TIMEOUT_MS = 3000;
+
+function hasAuthCookie() {
+  return document.cookie
+    .split(';')
+    .some((cookie) => cookie.trim().startsWith('auth='));
+}
+
+async function waitForAuthCookie() {
+  const deadline = Date.now() + AUTH_COOKIE_WAIT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (hasAuthCookie()) return true;
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+  }
+  return hasAuthCookie();
+}
+
+function finishAuthentication() {
+  (window as any).MoonTVCookieBridge?.flush?.();
+
+  const requestedRedirect = new URLSearchParams(window.location.search).get(
+    'redirect'
+  );
+  const redirect =
+    requestedRedirect?.startsWith('/') && !requestedRedirect.startsWith('//')
+      ? requestedRedirect
+      : '/';
+  window.location.replace(redirect);
+}
+
 function LoginPageClient({
   initialShouldAskUsername,
   initialEnableRegister,
 }: LoginPageClientProps) {
-  const router = useRouter();
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -119,6 +147,7 @@ function LoginPageClient({
       setLoading(true);
       const res = await fetch('/api/login', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           password: credentials.password,
@@ -127,9 +156,11 @@ function LoginPageClient({
       });
 
       if (res.ok) {
-        const redirect =
-          new URLSearchParams(window.location.search).get('redirect') || '/';
-        router.replace(redirect);
+        if (!(await waitForAuthCookie())) {
+          setError('登录成功，但登录凭证未保存，请重试');
+          return;
+        }
+        finishAuthentication();
       } else if (res.status === 401) {
         setError('密码错误');
       } else {
@@ -157,14 +188,17 @@ function LoginPageClient({
       setLoading(true);
       const res = await fetch('/api/register', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(credentials),
       });
 
       if (res.ok) {
-        const redirect =
-          new URLSearchParams(window.location.search).get('redirect') || '/';
-        router.replace(redirect);
+        if (!(await waitForAuthCookie())) {
+          setError('注册成功，但登录凭证未保存，请重新登录');
+          return;
+        }
+        finishAuthentication();
       } else {
         const data = await res.json().catch(() => ({}));
         setError(data.error ?? '服务器错误');

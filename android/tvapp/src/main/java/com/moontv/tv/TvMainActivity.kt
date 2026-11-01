@@ -14,6 +14,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -76,6 +77,7 @@ class TvMainActivity : AppCompatActivity() {
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(binding.webView, false)
+        binding.webView.addJavascriptInterface(CookieBridge(), COOKIE_BRIDGE_NAME)
 
         binding.webView.settings.apply {
             javaScriptEnabled = true
@@ -371,10 +373,18 @@ class TvMainActivity : AppCompatActivity() {
     override fun onDestroy() {
         exitFullscreen()
         binding.webView.stopLoading()
+        binding.webView.removeJavascriptInterface(COOKIE_BRIDGE_NAME)
         binding.webView.webChromeClient = null
         binding.webView.webViewClient = WebViewClient()
         binding.webView.destroy()
         super.onDestroy()
+    }
+
+    private class CookieBridge {
+        @JavascriptInterface
+        fun flush() {
+            CookieManager.getInstance().flush()
+        }
     }
 
     companion object {
@@ -382,6 +392,7 @@ class TvMainActivity : AppCompatActivity() {
         private const val KEY_SERVER_URL = "server_url"
         private const val DEFAULT_SERVER_URL = "https://moontv-58u.pages.dev"
         private const val TV_USER_AGENT_MARKER = "MoonTVTV"
+        private const val COOKIE_BRIDGE_NAME = "MoonTVCookieBridge"
         private const val TAG = "MoonTVTV"
 
         private val TV_NAVIGATION_SCRIPT =

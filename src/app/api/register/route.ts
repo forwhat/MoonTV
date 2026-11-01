@@ -57,6 +57,18 @@ async function generateAuthCookie(username: string): Promise<string> {
   return encodeURIComponent(JSON.stringify(authData));
 }
 
+function authCookieOptions(req: NextRequest, expires: Date) {
+  return {
+    path: '/',
+    expires,
+    sameSite: 'lax' as const,
+    httpOnly: false,
+    secure:
+      req.nextUrl.protocol === 'https:' ||
+      req.headers.get('x-forwarded-proto') === 'https',
+  };
+}
+
 export async function POST(req: NextRequest) {
   try {
     // localstorage 模式下不支持注册
@@ -109,13 +121,11 @@ export async function POST(req: NextRequest) {
       const expires = new Date();
       expires.setDate(expires.getDate() + 7); // 7天过期
 
-      response.cookies.set('auth', cookieValue, {
-        path: '/',
-        expires,
-        sameSite: 'lax', // 改为 lax 以支持 PWA
-        httpOnly: false, // PWA 需要客户端可访问
-        secure: false, // 根据协议自动设置
-      });
+      response.cookies.set(
+        'auth',
+        cookieValue,
+        authCookieOptions(req, expires)
+      );
 
       return response;
     } catch (err) {

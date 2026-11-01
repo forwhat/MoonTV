@@ -66,6 +66,18 @@ async function generateAuthCookie(
   return encodeURIComponent(JSON.stringify(authData));
 }
 
+function authCookieOptions(req: NextRequest, expires: Date) {
+  return {
+    path: '/',
+    expires,
+    sameSite: 'lax' as const,
+    httpOnly: false,
+    secure:
+      req.nextUrl.protocol === 'https:' ||
+      req.headers.get('x-forwarded-proto') === 'https',
+  };
+}
+
 export async function POST(req: NextRequest) {
   try {
     // 本地 / localStorage 模式——仅校验固定密码
@@ -77,13 +89,7 @@ export async function POST(req: NextRequest) {
         const response = NextResponse.json({ ok: true });
 
         // 清除可能存在的认证cookie
-        response.cookies.set('auth', '', {
-          path: '/',
-          expires: new Date(0),
-          sameSite: 'lax', // 改为 lax 以支持 PWA
-          httpOnly: false, // PWA 需要客户端可访问
-          secure: false, // 根据协议自动设置
-        });
+        response.cookies.set('auth', '', authCookieOptions(req, new Date(0)));
 
         return response;
       }
@@ -111,13 +117,11 @@ export async function POST(req: NextRequest) {
       const expires = new Date();
       expires.setDate(expires.getDate() + 7); // 7天过期
 
-      response.cookies.set('auth', cookieValue, {
-        path: '/',
-        expires,
-        sameSite: 'lax', // 改为 lax 以支持 PWA
-        httpOnly: false, // PWA 需要客户端可访问
-        secure: false, // 根据协议自动设置
-      });
+      response.cookies.set(
+        'auth',
+        cookieValue,
+        authCookieOptions(req, expires)
+      );
 
       return response;
     }
@@ -148,13 +152,11 @@ export async function POST(req: NextRequest) {
       const expires = new Date();
       expires.setDate(expires.getDate() + 7); // 7天过期
 
-      response.cookies.set('auth', cookieValue, {
-        path: '/',
-        expires,
-        sameSite: 'lax', // 改为 lax 以支持 PWA
-        httpOnly: false, // PWA 需要客户端可访问
-        secure: false, // 根据协议自动设置
-      });
+      response.cookies.set(
+        'auth',
+        cookieValue,
+        authCookieOptions(req, expires)
+      );
 
       return response;
     } else if (username === process.env.USERNAME) {
@@ -188,13 +190,11 @@ export async function POST(req: NextRequest) {
       const expires = new Date();
       expires.setDate(expires.getDate() + 7); // 7天过期
 
-      response.cookies.set('auth', cookieValue, {
-        path: '/',
-        expires,
-        sameSite: 'lax', // 改为 lax 以支持 PWA
-        httpOnly: false, // PWA 需要客户端可访问
-        secure: false, // 根据协议自动设置
-      });
+      response.cookies.set(
+        'auth',
+        cookieValue,
+        authCookieOptions(req, expires)
+      );
 
       return response;
     } catch (err) {
