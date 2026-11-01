@@ -4,7 +4,7 @@
 
 import { AlertCircle, CheckCircle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { checkForUpdates, CURRENT_VERSION, UpdateStatus } from '@/lib/version';
 
@@ -81,6 +81,8 @@ function LoginPageClient({
   const [loading, setLoading] = useState(false);
   const shouldAskUsername = initialShouldAskUsername;
   const [enableRegister, setEnableRegister] = useState(initialEnableRegister);
+  const usernameRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
   const { siteName } = useSite();
 
   // 服务端已经把认证模式写进首屏 HTML。客户端只同步注册开关，避免挂载后
@@ -92,11 +94,26 @@ function LoginPageClient({
     }
   }, []);
 
+  const readCredentials = () => ({
+    username: (usernameRef.current?.value ?? username).trim(),
+    password: passwordRef.current?.value ?? password,
+  });
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
 
-    if (!password || (shouldAskUsername && !username)) return;
+    const credentials = readCredentials();
+    if (!credentials.password) {
+      setError('请输入密码');
+      passwordRef.current?.focus();
+      return;
+    }
+    if (shouldAskUsername && !credentials.username) {
+      setError('请输入用户名');
+      usernameRef.current?.focus();
+      return;
+    }
 
     try {
       setLoading(true);
@@ -104,8 +121,8 @@ function LoginPageClient({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          password,
-          ...(shouldAskUsername ? { username } : {}),
+          password: credentials.password,
+          ...(shouldAskUsername ? { username: credentials.username } : {}),
         }),
       });
 
@@ -129,14 +146,19 @@ function LoginPageClient({
   // 处理注册逻辑
   const handleRegister = async () => {
     setError(null);
-    if (!password || !username) return;
+    const credentials = readCredentials();
+    if (!credentials.username || !credentials.password) {
+      setError('请输入用户名和密码');
+      (credentials.username ? passwordRef : usernameRef).current?.focus();
+      return;
+    }
 
     try {
       setLoading(true);
       const res = await fetch('/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify(credentials),
       });
 
       if (res.ok) {
@@ -170,13 +192,23 @@ function LoginPageClient({
                 用户名
               </label>
               <input
+                ref={usernameRef}
                 id='username'
+                name='username'
                 type='text'
                 autoComplete='username'
+                enterKeyHint='next'
                 className='block w-full rounded-lg border-0 py-3 px-4 text-gray-900 dark:text-gray-100 shadow-sm ring-1 ring-white/60 dark:ring-white/20 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-green-500 focus:outline-none sm:text-base bg-white/60 dark:bg-zinc-800/60 backdrop-blur'
                 placeholder='输入用户名'
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
+                onInput={(e) => setUsername(e.currentTarget.value)}
+                onBlur={(e) => setUsername(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter') return;
+                  e.preventDefault();
+                  passwordRef.current?.focus();
+                }}
               />
             </div>
           )}
@@ -186,13 +218,23 @@ function LoginPageClient({
               密码
             </label>
             <input
+              ref={passwordRef}
               id='password'
+              name='password'
               type='password'
               autoComplete='current-password'
+              enterKeyHint='done'
               className='block w-full rounded-lg border-0 py-3 px-4 text-gray-900 dark:text-gray-100 shadow-sm ring-1 ring-white/60 dark:ring-white/20 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-green-500 focus:outline-none sm:text-base bg-white/60 dark:bg-zinc-800/60 backdrop-blur'
               placeholder='输入访问密码'
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              onInput={(e) => setPassword(e.currentTarget.value)}
+              onBlur={(e) => setPassword(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }}
             />
           </div>
 
@@ -206,16 +248,14 @@ function LoginPageClient({
               <button
                 type='button'
                 onClick={handleRegister}
-                disabled={!password || !username || loading}
+                disabled={loading}
                 className='flex-1 inline-flex justify-center rounded-lg bg-blue-600 py-3 text-base font-semibold text-white shadow-lg transition-all duration-200 hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50'
               >
                 {loading ? '注册中...' : '注册'}
               </button>
               <button
                 type='submit'
-                disabled={
-                  !password || loading || (shouldAskUsername && !username)
-                }
+                disabled={loading}
                 className='flex-1 inline-flex justify-center rounded-lg bg-green-600 py-3 text-base font-semibold text-white shadow-lg transition-all duration-200 hover:from-green-600 hover:to-blue-600 disabled:cursor-not-allowed disabled:opacity-50'
               >
                 {loading ? '登录中...' : '登录'}
@@ -224,9 +264,7 @@ function LoginPageClient({
           ) : (
             <button
               type='submit'
-              disabled={
-                !password || loading || (shouldAskUsername && !username)
-              }
+              disabled={loading}
               className='inline-flex w-full justify-center rounded-lg bg-green-600 py-3 text-base font-semibold text-white shadow-lg transition-all duration-200 hover:from-green-600 hover:to-blue-600 disabled:cursor-not-allowed disabled:opacity-50'
             >
               {loading ? '登录中...' : '登录'}

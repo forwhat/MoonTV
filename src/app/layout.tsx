@@ -2,6 +2,7 @@
 
 import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
+import { cache } from 'react';
 
 import './globals.css';
 import 'sweetalert2/dist/sweetalert2.min.css';
@@ -23,12 +24,13 @@ import UserOnlineUpdate from '../components/UserOnlineUpdate';
 export const runtime = 'edge';
 
 const inter = Inter({ subsets: ['latin'] });
+const getLayoutConfig = cache(getConfig);
 
 // 动态生成 metadata，支持配置更新后的标题变化
 export async function generateMetadata(): Promise<Metadata> {
   let siteName = process.env.NEXT_PUBLIC_SITE_NAME || 'MoonTV';
   if (process.env.NEXT_PUBLIC_STORAGE_TYPE !== 'localstorage') {
-    const config = await getConfig();
+    const config = await getLayoutConfig();
     siteName = config.SiteConfig.SiteName;
   }
 
@@ -61,19 +63,16 @@ export default async function RootLayout({
     process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE || 'direct';
   let doubanImageProxy = process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY || '';
   let bangumiProxy = process.env.NEXT_PUBLIC_BANGUMI_PROXY || '';
-  let bangumiImageProxy =
-    process.env.NEXT_PUBLIC_BANGUMI_IMAGE_PROXY || '';
+  let bangumiImageProxy = process.env.NEXT_PUBLIC_BANGUMI_IMAGE_PROXY || '';
   let disableYellowFilter =
     process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true';
-  let danmakuApiBaseUrl =
-    process.env.NEXT_PUBLIC_DANMU_API_BASE_URL ||
-    '';
+  let danmakuApiBaseUrl = process.env.NEXT_PUBLIC_DANMU_API_BASE_URL || '';
   let playbackSaveInterval =
     Number(process.env.NEXT_PUBLIC_PLAYBACK_SAVE_INTERVAL) ||
     getDefaultPlaybackSaveInterval(storageType);
   let autoUpdateEnabled = false;
   if (storageType !== 'localstorage') {
-    const config = await getConfig();
+    const config = await getLayoutConfig();
     siteName = config.SiteConfig.SiteName;
     announcement = config.SiteConfig.Announcement;
     enableRegister = config.UserConfig.AllowRegister;
@@ -141,13 +140,13 @@ export default async function RootLayout({
             <SiteProvider siteName={siteName} announcement={announcement}>
               <NavigationLoadingIndicator />
               <UserOnlineUpdate />
-              
+
               {/* 条件导航栏 - 根据路径自动判断是否显示 */}
               <ConditionalNav />
-              
+
               {/* 全局下载管理器 - 只渲染一次，被所有导航栏共享 */}
               <GlobalDownloadManager />
-              
+
               {/* 页面内容 */}
               <div className='relative w-full'>
                 <main
@@ -159,7 +158,7 @@ export default async function RootLayout({
                   {children}
                 </main>
               </div>
-              
+
               <GlobalErrorIndicator />
               {autoUpdateEnabled && <SubscriptionAutoUpdate />}
             </SiteProvider>

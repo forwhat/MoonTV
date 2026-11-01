@@ -338,7 +338,24 @@ class TvMainActivity : AppCompatActivity() {
         binding.errorPanel.isVisible = false
         binding.webView.isVisible = true
         if (clearHttpCache) binding.webView.clearCache(true)
-        binding.webView.loadUrl(serverUrl)
+        binding.webView.loadUrl(resolveStartUrl(serverUrl))
+    }
+
+    private fun resolveStartUrl(serverUrl: String): String {
+        val hasAuthCookie = CookieManager.getInstance().getCookie(serverUrl)
+            .orEmpty()
+            .split(';')
+            .any { cookie ->
+                val parts = cookie.trim().split('=', limit = 2)
+                parts.firstOrNull() == "auth" && parts.getOrNull(1).orEmpty().isNotBlank()
+            }
+        if (hasAuthCookie) return serverUrl
+
+        return serverUrl.toUri().buildUpon()
+            .appendPath("login")
+            .appendQueryParameter("redirect", "/")
+            .build()
+            .toString()
     }
 
     private fun normalizeServerUrl(input: String): String? {
@@ -565,11 +582,12 @@ class TvMainActivity : AppCompatActivity() {
                     const clickTarget = active.matches('a[href],button,input,select,textarea,[role="button"],[role="tab"]')
                       ? active
                       : active.querySelector('a[href],button,[role="button"],svg');
-                    (clickTarget || active).dispatchEvent(new MouseEvent('click', {
-                      bubbles: true,
-                      cancelable: true,
-                      view: window
-                    }));
+                    const target = clickTarget || active;
+                    if (target instanceof HTMLButtonElement && target.type === 'submit' && target.form) {
+                      target.form.requestSubmit(target);
+                    } else if (target instanceof HTMLElement) {
+                      target.click();
+                    }
                   } else initialFocus();
                   return;
                 }
