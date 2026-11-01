@@ -14,10 +14,15 @@ internal object HlsVariantResolver {
     private const val READ_TIMEOUT_MS = 6_000
     private const val MAX_PLAYLIST_BYTES = 1024 * 1024
 
-    fun resolveVariant(url: String): String? {
-        if (!isHlsUrl(url)) return null
-        val download = download(url) ?: return null
-        return selectVariant(download.finalUrl, download.body)?.takeIf { it != url }
+    fun resolveVariant(url: String, trace: (String) -> Unit = {}): String? {
+        if (!isHlsUrl(url)) {
+            trace("HLS variant: skipped, URL has no m3u8 suffix")
+            return null
+        }
+        val download = download(url, trace) ?: return null
+        val selected = selectVariant(download.finalUrl, download.body)?.takeIf { it != url }
+        trace("HLS variant=${selected ?: "no distinct variant found"}")
+        return selected
     }
 
     internal fun selectVariant(baseUrl: String, playlist: String): String? {
@@ -40,7 +45,7 @@ internal object HlsVariantResolver {
         return path.endsWith(".m3u8")
     }
 
-    private fun download(url: String): PlaylistDownload? {
+    private fun download(url: String, trace: (String) -> Unit): PlaylistDownload? {
         var connection: HttpURLConnection? = null
         return try {
             connection = URI(url).toURL().openConnection() as? HttpURLConnection ?: return null
@@ -53,7 +58,9 @@ internal object HlsVariantResolver {
                 "application/vnd.apple.mpegurl, application/x-mpegURL, */*",
             )
             connection.setRequestProperty("User-Agent", "MoonTV-Android")
-            if (connection.responseCode !in 200..299) return null
+            val status = connection.responseCode
+            trace("HLS inspect HTTP=$status contentType=${connection.contentType}\nFinalURL=${connection.url}")
+            if (status !in 200..299) return null
 
             val output = ByteArrayOutputStream()
             connection.inputStream.use { input ->
@@ -70,7 +77,8 @@ internal object HlsVariantResolver {
                 finalUrl = connection.url.toString(),
                 body = output.toString(Charsets.UTF_8.name()),
             )
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            trace("HLS inspect ${error.javaClass.simpleName}: ${error.message}")
             null
         } finally {
             connection?.disconnect()

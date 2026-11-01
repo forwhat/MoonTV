@@ -31,6 +31,7 @@ function RankingClient() {
   const [currentPage, setCurrentPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const loadingRef = useRef<HTMLDivElement>(null);
 
   const loadInitial = useCallback(async (id: DoubanCollectionId) => {
@@ -38,6 +39,7 @@ function RankingClient() {
     setData([]);
     setCurrentPage(0);
     setHasMore(true);
+    setLoadError('');
     try {
       const result = await getDoubanCollection(id, 0, 25);
       if (result.code === 200) {
@@ -46,6 +48,10 @@ function RankingClient() {
       }
     } catch (err) {
       console.error('获取榜单失败', err);
+      setHasMore(false);
+      setLoadError(
+        err instanceof Error ? err.message : '榜单加载失败，请稍后重试'
+      );
     } finally {
       setLoading(false);
     }
@@ -61,6 +67,7 @@ function RankingClient() {
     void (async () => {
       setIsLoadingMore(true);
       try {
+        setLoadError('');
         const result = await getDoubanCollection(
           activeId,
           currentPage * 25,
@@ -72,6 +79,10 @@ function RankingClient() {
         }
       } catch (err) {
         console.error('加载更多失败', err);
+        setHasMore(false);
+        setLoadError(
+          err instanceof Error ? err.message : '加载更多失败，请稍后重试'
+        );
       } finally {
         setIsLoadingMore(false);
       }
@@ -161,6 +172,23 @@ function RankingClient() {
                 </div>
               )}
             </div>
+          )}
+
+          {!loading && loadError && (
+            <div className='flex flex-col items-center gap-3 py-10 text-center text-gray-500'>
+              <span>{loadError}</span>
+              <button
+                type='button'
+                onClick={() => void loadInitial(activeId)}
+                className='rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-500'
+              >
+                重新加载
+              </button>
+            </div>
+          )}
+
+          {!loading && !loadError && data.length === 0 && (
+            <div className='py-10 text-center text-gray-500'>暂无榜单内容</div>
           )}
         </div>
       </div>

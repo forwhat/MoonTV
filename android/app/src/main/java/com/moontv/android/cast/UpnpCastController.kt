@@ -1,9 +1,12 @@
 package com.moontv.android.cast
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
+import com.moontv.android.BuildConfig
 import com.yinnho.upnpcast.CastOptions
 import com.yinnho.upnpcast.DLNACast
+import com.yinnho.upnpcast.internal.core.UpnpHttp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -12,6 +15,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 class UpnpCastController(context: Context) : DlnaController {
+    private val diagnostics = CastDiagnostics()
     init {
         DLNACast.init(context.applicationContext)
     }
@@ -30,51 +34,84 @@ class UpnpCastController(context: Context) : DlnaController {
 
     override suspend fun cast(device: DlnaDevice, media: CastMedia): Boolean =
         withContext(Dispatchers.IO) {
-            DLNACast.clearProgressCache()
-            val target = DLNACast.Device(device.id, device.name, device.address, device.isTv)
-            var attemptIndex = 0
-            val candidateUrls = mutableListOf(media.url)
-            var candidateIndex = 0
-            while (candidateIndex < candidateUrls.size) {
-                val candidateUrl = candidateUrls[candidateIndex]
-                for (profile in DlnaCastProfiles.forUrl(candidateUrl)) {
-                    if (attemptIndex > 0) {
-                        runCatching { DLNACast.stop() }
-                        delay(COMPATIBILITY_RETRY_DELAY_MS)
-                    }
-
-                    var accepted = DLNACast.castToDevice(
-                        device = target,
-                        url = candidateUrl,
-                        title = media.title,
-                        options = CastOptions(
-                            metadata = if (profile.emptyMetadata) "" else null,
-                            mimeType = profile.mimeType,
-                        ),
-                    )
-                    if (!accepted) {
-                        delay(DELAYED_PLAY_RETRY_MS)
-                        accepted = DLNACast.play()
-                    }
-                    Log.i(
-                        TAG,
-                        "DLNA cast attempt=$attemptIndex profile=${profile.name}: accepted=$accepted",
-                    )
-                    if (accepted) {
-                        if (media.positionMs > 1_000) {
-                            DLNACast.seek(media.positionMs)
-                        }
-                        return@withContext true
-                    }
-                    attemptIndex += 1
-                }
-                if (candidateIndex == 0) {
-                    HlsVariantResolver.resolveVariant(media.url)?.let(candidateUrls::add)
-                }
-                candidateIndex += 1
+            diagnostics.reset(
+                "MoonTV DLNA report v1\nTime=${CastDiagnostics.timestamp()}\n" +
+                    "App=${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\n" +
+                    "Android=${Build.VERSION.RELEASE} SDK=${Build.VERSION.SDK_INT} device=${Build.MANUFACTURER}/${Build.MODEL}\n" +
+                    "TV=${device.name}\nDescription=${device.id}\nAddress=${device.address}\n" +
+                    "Title=${media.title}\nMedia=${media.url}\nPositionMs=${media.positionMs}\n" +
+                    "Mode=direct URL; local playback proxy is NOT sent to TV\nURLs: query, fragment and user-info hidden",
+            )
+            UpnpHttp.diagnosticObserver = { event ->
+                val body = if (event.operation.startsWith("GET")) {
+                    Regex("<(?:[\\w-]+:)?(manufacturer|modelName|URLBase|serviceType|controlURL)(?:\\s[^>]*)?>(.*?)</(?:[\\w-]+:)?\\1>",
+                        setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+                        .findAll(event.response).joinToString("\n") { "${it.groupValues[1]}=${it.groupValues[2].trim()}" }
+                } else event.response
+                diagnostics.add("${event.operation}\nURL=${event.url}\nHTTP=${event.status ?: "no response"} elapsed=${event.elapsedMs}ms\n" +
+                    "${event.requestSummary.orEmpty()}\n${event.error.orEmpty()}\n$body")
             }
-            false
+            try {
+                // The upstream controller may reuse cached descriptions. Fetch a
+                // read-only snapshot for the report without changing its cache.
+                UpnpHttp.get(device.id, connectTimeoutMs = 2_000, readTimeoutMs = 3_000)
+                DLNACast.clearProgressCache()
+                val target = DLNACast.Device(device.id, device.name, device.address, device.isTv)
+                var attemptIndex = 0
+                val candidateUrls = mutableListOf(media.url)
+                var candidateIndex = 0
+                while (candidateIndex < candidateUrls.size) {
+                    val candidateUrl = candidateUrls[candidateIndex]
+                    for (profile in DlnaCastProfiles.forUrl(candidateUrl)) {
+                        diagnostics.add("Attempt=$attemptIndex candidate=$candidateIndex profile=${profile.name} mime=${profile.mimeType ?: "auto"} emptyMetadata=${profile.emptyMetadata}\nMedia=$candidateUrl")
+                        if (attemptIndex > 0) {
+                            runCatching { DLNACast.stop() }
+                            delay(COMPATIBILITY_RETRY_DELAY_MS)
+                        }
+
+                        var accepted = DLNACast.castToDevice(
+                            device = target,
+                            url = candidateUrl,
+                            title = media.title,
+                            options = CastOptions(
+                                metadata = if (profile.emptyMetadata) "" else null,
+                                mimeType = profile.mimeType,
+                            ),
+                        )
+                        if (!accepted) {
+                            diagnostics.add("castToDevice=false; retrying Play after delay")
+                            delay(DELAYED_PLAY_RETRY_MS)
+                            accepted = DLNACast.play()
+                        }
+                        Log.i(
+                            TAG,
+                            "DLNA cast attempt=$attemptIndex profile=${profile.name}: accepted=$accepted",
+                        )
+                        diagnostics.add("Attempt=$attemptIndex accepted=$accepted")
+                        if (accepted) {
+                            if (media.positionMs > 1_000) {
+                                DLNACast.seek(media.positionMs)
+                            }
+                            return@withContext true
+                        }
+                        attemptIndex += 1
+                    }
+                    if (candidateIndex == 0) {
+                        HlsVariantResolver.resolveVariant(media.url, diagnostics::add)?.let(candidateUrls::add)
+                    }
+                    candidateIndex += 1
+                }
+                diagnostics.add("Result=failed")
+                false
+            } catch (error: Exception) {
+                diagnostics.add("Exception=${error.javaClass.simpleName}: ${error.message}")
+                throw error
+            } finally {
+                UpnpHttp.diagnosticObserver = null
+            }
         }
+
+    override fun diagnostics(): String = diagnostics.snapshot()
 
     override suspend fun play(): Boolean = withContext(Dispatchers.IO) { DLNACast.play() }
 

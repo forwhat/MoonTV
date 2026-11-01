@@ -2,7 +2,7 @@
 
 'use client';
 
-import { AlertCircle, CheckCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle, Cloud, RefreshCw } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
@@ -180,6 +180,34 @@ function LoginPageClient({
 
   return (
     <div className='relative min-h-screen flex items-center justify-center px-4 overflow-hidden'>
+      {typeof window !== 'undefined' && window.MoonTVNative && (
+        <div className='absolute left-4 top-4 z-20 flex gap-2'>
+          <button
+            type='button'
+            onClick={() =>
+              window.MoonTVNative?.postMessage(
+                JSON.stringify({
+                  version: 1,
+                  type: 'action',
+                  action: 'open-settings',
+                })
+              )
+            }
+            className='inline-flex items-center gap-2 rounded-lg bg-white/70 px-3 py-2 text-sm text-gray-700 shadow-sm backdrop-blur dark:bg-zinc-900/70 dark:text-gray-200'
+          >
+            <Cloud className='h-4 w-4' />
+            运行模式
+          </button>
+          <button
+            type='button'
+            onClick={() => window.location.reload()}
+            className='inline-flex items-center gap-2 rounded-lg bg-white/70 px-3 py-2 text-sm text-gray-700 shadow-sm backdrop-blur dark:bg-zinc-900/70 dark:text-gray-200'
+          >
+            <RefreshCw className='h-4 w-4' />
+            重新加载
+          </button>
+        </div>
+      )}
       <div className='absolute top-4 right-4'>
         <ThemeToggle />
       </div>

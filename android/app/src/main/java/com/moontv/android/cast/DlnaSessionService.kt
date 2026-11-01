@@ -37,6 +37,7 @@ class DlnaSessionService : Service() {
 
     private val mutableState = MutableStateFlow(CastSessionState())
     val state: StateFlow<CastSessionState> = mutableState.asStateFlow()
+    val diagnosticsReport: String get() = controller.diagnostics()
 
     override fun onCreate() {
         super.onCreate()

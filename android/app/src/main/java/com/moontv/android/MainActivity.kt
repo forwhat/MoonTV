@@ -3,6 +3,8 @@ package com.moontv.android
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ComponentName
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
@@ -22,10 +24,16 @@ import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.widget.ScrollView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -50,6 +58,8 @@ import com.moontv.android.cast.DlnaDevice
 import com.moontv.android.cast.DlnaSessionService
 import com.moontv.android.cast.RemotePlaybackState
 import com.moontv.android.databinding.ActivityMainBinding
+import com.moontv.android.local.LocalMoonServer
+import com.moontv.android.local.SyncPreferences
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -66,13 +76,14 @@ class MainActivity : AppCompatActivity() {
     private var lastState = CastSessionState()
     private var lastShownError: String? = null
     private var loadErrorDialogShown = false
+    private var criticalResourceFailure = false
+    private var resetHistoryOnNextPage = false
     private var fullscreenView: View? = null
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
     private var orientationBeforeFullscreen = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    private var localServer: LocalMoonServer? = null
 
-    private val preferences by lazy {
-        getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
-    }
+    private val syncPreferences by lazy { SyncPreferences.open(applicationContext) }
 
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -105,12 +116,7 @@ class MainActivity : AppCompatActivity() {
         setupCastControls()
         setupBackNavigation()
 
-        val serverUrl = preferences.getString(KEY_SERVER_URL, null)
-        if (serverUrl == null) {
-            showServerDialog(required = true)
-        } else {
-            loadServer(serverUrl)
-        }
+        startApp()
     }
 
     override fun onStart() {
@@ -135,6 +141,11 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
+        val runtimeState = getSharedPreferences(RUNTIME_STATE_PREFS, Context.MODE_PRIVATE)
+        if (runtimeState.getInt(KEY_LAST_WEB_VERSION, -1) != BuildConfig.VERSION_CODE) {
+            binding.webView.clearCache(true)
+            runtimeState.edit().putInt(KEY_LAST_WEB_VERSION, BuildConfig.VERSION_CODE).apply()
+        }
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(binding.webView, false)
         binding.webView.settings.apply {
@@ -176,11 +187,20 @@ class MainActivity : AppCompatActivity() {
         binding.webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 loadErrorDialogShown = false
+                criticalResourceFailure = false
                 binding.pageProgress.isVisible = true
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 binding.pageProgress.isVisible = false
+                if (resetHistoryOnNextPage) {
+                    resetHistoryOnNextPage = false
+                    view?.clearHistory()
+                }
+                if (criticalResourceFailure && !loadErrorDialogShown) {
+                    loadErrorDialogShown = true
+                    showReloadDialog("页面脚本或样式加载失败，可以重新加载页面后再试。")
+                }
             }
 
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -196,19 +216,52 @@ class MainActivity : AppCompatActivity() {
                 error: WebResourceError?,
             ) {
                 super.onReceivedError(view, request, error)
-                if (request?.isForMainFrame != true || loadErrorDialogShown) return
+                if (request?.isForMainFrame != true) {
+                    if (isCriticalWebResource(request?.url)) criticalResourceFailure = true
+                    return
+                }
+                if (loadErrorDialogShown) return
                 loadErrorDialogShown = true
                 binding.pageProgress.isVisible = false
-                MaterialAlertDialogBuilder(this@MainActivity)
-                    .setTitle("无法加载 MoonTV")
-                    .setMessage("请检查服务地址和网络连接。")
-                    .setPositiveButton("修改服务地址") { _, _ ->
-                        showServerDialog(required = true)
-                    }
-                    .setNegativeButton("重试") { _, _ -> view?.reload() }
-                    .show()
+                showReloadDialog(
+                    if (currentMode() == MODE_SERVER) {
+                        "服务端请求失败，请检查服务器地址和网络后重试。"
+                    } else {
+                        "本地页面加载失败，请重新加载或重启应用。"
+                    },
+                )
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                errorResponse: WebResourceResponse?,
+            ) {
+                super.onReceivedHttpError(view, request, errorResponse)
+                if ((errorResponse?.statusCode ?: 0) >= 400 && isCriticalWebResource(request?.url)) {
+                    criticalResourceFailure = true
+                }
             }
         }
+    }
+
+    private fun isCriticalWebResource(uri: Uri?): Boolean =
+        uri?.path?.let { it.endsWith("/app.js") || it.endsWith("/app.css") } == true
+
+    private fun showReloadDialog(message: String) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("MoonTV 加载异常")
+            .setMessage(message)
+            .setPositiveButton("重新加载") { _, _ -> reloadApp() }
+            .setNeutralButton("切换模式") { _, _ -> showModeDialog() }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun reloadApp() {
+        loadErrorDialogShown = false
+        criticalResourceFailure = false
+        binding.webView.reload()
     }
 
     private fun setupWindowInsets() {
@@ -295,63 +348,123 @@ class MainActivity : AppCompatActivity() {
             override fun handleOnBackPressed() {
                 if (exitFullscreen()) {
                     return
-                } else if (binding.webView.canGoBack()) {
+                }
+                val path = binding.webView.url?.toUri()?.path.orEmpty()
+                if (path !in setOf("", "/", "/login") && binding.webView.canGoBack()) {
                     binding.webView.goBack()
                 } else {
-                    finish()
+                    MaterialAlertDialogBuilder(this@MainActivity)
+                        .setMessage("要退出 MoonTV，还是重新加载当前页面？")
+                        .setPositiveButton("退出") { _, _ -> finish() }
+                        .setNeutralButton("重新加载") { _, _ -> reloadApp() }
+                        .setNegativeButton("取消", null)
+                        .show()
                 }
             }
         })
     }
 
-    private fun showServerDialog(required: Boolean) {
-        val input = EditText(this).apply {
-            hint = getString(R.string.server_url_hint)
+    private fun showModeDialog() {
+        val density = resources.displayMetrics.density
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val horizontal = (24 * density).toInt()
+            setPadding(horizontal, 0, horizontal, 0)
+        }
+        val modeGroup = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        val localMode = RadioButton(this).apply {
+            id = View.generateViewId()
+            text = "本地模式（数据仅保存在本机）"
+        }
+        val serverMode = RadioButton(this).apply {
+            id = View.generateViewId()
+            text = "服务端模式（使用服务端账号和数据）"
+        }
+        modeGroup.addView(localMode)
+        modeGroup.addView(serverMode)
+        val serverInput = EditText(this).apply {
+            hint = "服务端地址，例如 https://moon.example.com"
             setSingleLine(true)
             inputType = android.text.InputType.TYPE_CLASS_TEXT or
                 android.text.InputType.TYPE_TEXT_VARIATION_URI
-            setText(preferences.getString(KEY_SERVER_URL, ""))
+            setText(syncPreferences.getString(SyncPreferences.KEY_SERVER_URL, ""))
             setSelection(text.length)
         }
+        val selectedMode = currentMode()
+        modeGroup.check(if (selectedMode == MODE_SERVER) serverMode.id else localMode.id)
+        serverInput.isEnabled = selectedMode == MODE_SERVER
+        modeGroup.setOnCheckedChangeListener { _, checkedId ->
+            serverInput.isEnabled = checkedId == serverMode.id
+        }
+        container.addView(modeGroup)
+        container.addView(serverInput)
         val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.server_url_title)
-            .setView(input)
-            .setCancelable(!required)
-            .setNegativeButton(if (required) null else "取消", null)
-            .setNeutralButton(if (required) null else "清理缓存", null)
+            .setTitle("运行模式")
+            .setMessage("两种模式的数据完全独立。切换模式不会复制、合并或删除另一种模式的数据。")
+            .setView(container)
+            .setCancelable(true)
+            .setNegativeButton("取消", null)
             .setPositiveButton("保存", null)
             .create()
 
         dialog.setOnShowListener {
-            dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
-                binding.webView.clearCache(true)
-                binding.webView.reload()
-                Toast.makeText(this, "网页缓存已清理", Toast.LENGTH_SHORT).show()
-                dialog.dismiss()
-            }
             dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val normalized = normalizeServerUrl(input.text.toString())
-                if (normalized == null) {
-                    input.error = getString(R.string.server_url_error)
+                val mode = if (modeGroup.checkedRadioButtonId == serverMode.id) MODE_SERVER else MODE_LOCAL
+                val raw = serverInput.text.toString().trim()
+                val normalized = if (mode == MODE_SERVER) normalizeServerUrl(raw) else null
+                if (mode == MODE_SERVER && normalized == null) {
+                    serverInput.error = getString(R.string.server_url_error)
                     return@setOnClickListener
                 }
-                preferences.edit { putString(KEY_SERVER_URL, normalized) }
-                loadServer(normalized)
+                syncPreferences.edit()
+                    .putString(SyncPreferences.KEY_MODE, mode)
+                    .apply {
+                        if (normalized != null) putString(SyncPreferences.KEY_SERVER_URL, normalized)
+                    }
+                    .apply()
+                Toast.makeText(
+                    this,
+                    if (mode == MODE_SERVER) "已切换到服务端模式" else "已切换到本地模式",
+                    Toast.LENGTH_SHORT,
+                ).show()
+                startApp()
                 dialog.dismiss()
             }
         }
         dialog.show()
     }
 
-    private fun loadServer(serverUrl: String) {
-        val uri = serverUrl.toUri()
-        val origin = originOf(uri) ?: return
+    private fun currentMode(): String =
+        syncPreferences.getString(SyncPreferences.KEY_MODE, MODE_LOCAL) ?: MODE_LOCAL
+
+    private fun startApp() {
+        val serverMode = currentMode() == MODE_SERVER
+        val url = if (serverMode) {
+            val url = normalizeServerUrl(
+                syncPreferences.getString(SyncPreferences.KEY_SERVER_URL, "").orEmpty(),
+            )
+            if (url == null) {
+                showModeDialog()
+                return
+            }
+            url
+        } else {
+            null
+        }
+        localServer?.stop()
+        val server = LocalMoonServer(applicationContext, serverMode, url)
+        runCatching { server.startServer() }
+            .onFailure { error ->
+                Log.e(TAG, "Unable to start local MoonTV runtime", error)
+                showError("MoonTV 本地前端启动失败：${error.message ?: "未知错误"}")
+                return
+            }
+        localServer = server
+        val origin = server.baseUrl
         configuredOrigin = origin
         installMessageBridge(origin)
-        // Revalidate the entry document after a deployment, but keep immutable hashed
-        // Next.js chunks cached. Clearing the whole HTTP cache makes every startup a
-        // cold load and amplifies ordinary network latency into apparent timeouts.
-        binding.webView.loadUrl(serverUrl, mapOf("Cache-Control" to "no-cache"))
+        resetHistoryOnNextPage = true
+        binding.webView.loadUrl(origin)
     }
 
     @SuppressLint("RequiresFeature")
@@ -386,7 +499,8 @@ class MainActivity : AppCompatActivity() {
                 "action" -> {
                     when (message.optString("action")) {
                         "discover" -> binding.root.post { beginDiscovery() }
-                        "open-settings" -> binding.root.post { showServerDialog(required = false) }
+                        "open-settings" -> binding.root.post { showModeDialog() }
+                        "reload" -> binding.root.post { reloadApp() }
                     }
                     return
                 }
@@ -475,7 +589,10 @@ class MainActivity : AppCompatActivity() {
                     Toast.LENGTH_SHORT,
                 ).show()
             }.onFailure { error ->
-                showError(getString(R.string.cast_failed, error.message ?: "未知错误"))
+                showCastError(
+                    getString(R.string.cast_failed, error.message ?: "未知错误"),
+                    service.diagnosticsReport,
+                )
             }
         }
     }
@@ -573,6 +690,37 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun copyCastReport(report: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("MoonTV 投屏排障信息", report))
+        Toast.makeText(this, "排障信息已复制，可粘贴发送", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showCastError(message: String, report: String) {
+        val snapshot = report.ifBlank { "未记录到投屏请求，请重新搜索电视后重试。" }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("投屏失败")
+            .setMessage("$message\n\n可复制排障信息发给开发者分析。网址中的查询参数已隐藏。")
+            .setPositiveButton("知道了", null)
+            .setNeutralButton("复制排障信息") { _, _ -> copyCastReport(snapshot) }
+            .setNegativeButton("查看详情") { _, _ ->
+                val text = TextView(this).apply {
+                    setText(snapshot)
+                    setTextIsSelectable(true)
+                    textSize = 12f
+                    val padding = (20 * resources.displayMetrics.density).toInt()
+                    setPadding(padding, padding, padding, padding)
+                }
+                MaterialAlertDialogBuilder(this)
+                    .setTitle("投屏排障信息")
+                    .setView(ScrollView(this).apply { addView(text) })
+                    .setPositiveButton("复制") { _, _ -> copyCastReport(snapshot) }
+                    .setNegativeButton("关闭", null)
+                    .show()
+            }
+            .show()
+    }
+
     private fun normalizeServerUrl(input: String): String? {
         val trimmed = input.trim().trimEnd('/')
         val withScheme = if ("://" in trimmed) trimmed else "https://$trimmed"
@@ -617,15 +765,19 @@ class MainActivity : AppCompatActivity() {
         }
         binding.webView.stopLoading()
         binding.webView.destroy()
+        localServer?.stop()
+        localServer = null
         super.onDestroy()
     }
 
     companion object {
-        private const val PREFERENCES_NAME = "moontv_android"
-        private const val KEY_SERVER_URL = "server_url"
         private const val BRIDGE_NAME = "MoonTVNative"
         private const val BRIDGE_VERSION = 1
         private const val ANDROID_USER_AGENT_MARKER = "MoonTVAndroid"
         private const val TAG = "MoonTVWebView"
+        private const val MODE_LOCAL = "local"
+        private const val MODE_SERVER = "server"
+        private const val RUNTIME_STATE_PREFS = "moontv_runtime_state"
+        private const val KEY_LAST_WEB_VERSION = "last_web_version"
     }
 }

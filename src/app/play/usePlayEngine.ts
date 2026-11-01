@@ -748,9 +748,7 @@ export function usePlayEngine() {
     return true;
   };
 
-  const postNativeAction = (
-    action: 'discover' | 'open-settings'
-  ): boolean => {
+  const postNativeAction = (action: 'discover' | 'open-settings'): boolean => {
     if (typeof window === 'undefined' || !window.MoonTVNative) return false;
     window.MoonTVNative.postMessage(
       JSON.stringify({
@@ -767,13 +765,7 @@ export function usePlayEngine() {
     postMediaToNative();
     const timer = window.setInterval(postMediaToNative, 2000);
     return () => window.clearInterval(timer);
-  }, [
-    isMoonTVAndroid,
-    videoUrl,
-    videoTitle,
-    currentEpisodeIndex,
-    detail,
-  ]);
+  }, [isMoonTVAndroid, videoUrl, videoTitle, currentEpisodeIndex, detail]);
 
   // ---- P1-5 / P1-6 相关 ----
   /** 当前 HLS 实例的错误恢复状态机（换源/重建时销毁重建） */
@@ -1272,12 +1264,13 @@ export function usePlayEngine() {
   useEffect(() => {
     const fetchSourcesData = async (
       query: string,
-      onResult?: (results: SearchResult[]) => void
+      onResult?: (results: SearchResult[]) => void,
+      seedResults: SearchResult[] = []
     ): Promise<SearchResult[]> => {
       setSourceSearchLoading(true);
       setSourceSearchError('');
 
-      const aggregatedResults: SearchResult[] = [];
+      const aggregatedResults: SearchResult[] = [...seedResults];
       const targetYear = videoYearRef.current;
 
       try {
@@ -1405,6 +1398,33 @@ export function usePlayEngine() {
       setTimeout(() => setLoading(false), 500);
     }
 
+    const fetchDirectDetail = async (): Promise<SearchResult | null> => {
+      if (!currentSource || !currentId) return null;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 12000);
+      try {
+        const params = new URLSearchParams({
+          source: currentSource,
+          id: currentId,
+        });
+        const response = await fetch(`/api/detail?${params}`, {
+          signal: controller.signal,
+          headers: { Accept: 'application/json' },
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const result = (await response.json()) as SearchResult;
+        if (!result?.id || !result?.source || !Array.isArray(result.episodes)) {
+          throw new Error('视频详情格式无效');
+        }
+        return result;
+      } catch (error) {
+        console.warn('直接获取视频详情失败，将回退到搜索', error);
+        return null;
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    };
+
     const initAll = async () => {
       if (!currentSource && !currentId && !videoTitle && !searchTitle) {
         setError('缺少必要参数');
@@ -1435,6 +1455,23 @@ export function usePlayEngine() {
       let allResults: SearchResult[] = [];
       let hasInitialized = false; // 标记是否已经初始化过播放数据
 
+      if (currentSource && currentId && !enablePreferBestSourceFromStorage) {
+        const directDetail = await fetchDirectDetail();
+        if (directDetail) {
+          detailData = directDetail;
+          allResults = [directDetail];
+          setAvailableSources([directDetail]);
+          initDetail(directDetail);
+          hasInitialized = true;
+          void fetchSourcesData(
+            videoTitle || searchTitle || directDetail.title,
+            undefined,
+            [directDetail]
+          );
+          return;
+        }
+      }
+
       await fetchSourcesData(videoTitle || searchTitle, (newResults) => {
         allResults = [...allResults, ...newResults];
 
@@ -1452,6 +1489,18 @@ export function usePlayEngine() {
             }
             // 如果启用优选，则等待所有源收集完再决定是否优选
           }
+        }
+
+        if (
+          !detailData &&
+          !currentSource &&
+          !currentId &&
+          !enablePreferBestSourceFromStorage &&
+          newResults.length > 0
+        ) {
+          detailData = newResults[0];
+          initDetail(detailData);
+          hasInitialized = true;
         }
       });
 
@@ -2114,7 +2163,11 @@ export function usePlayEngine() {
       const mediaUrl = currentVideoUrlRef.current || videoUrl;
       if (state.url !== mediaUrl) return;
 
-      if (state.active && artPlayerRef.current && !artPlayerRef.current.paused) {
+      if (
+        state.active &&
+        artPlayerRef.current &&
+        !artPlayerRef.current.paused
+      ) {
         artPlayerRef.current.pause();
       }
 
@@ -2791,11 +2844,16 @@ export function usePlayEngine() {
               loader: CustomHlsJsLoader,
             });
 
-            hls.loadSource(url);
+            const playbackUrl =
+              typeof window !== 'undefined' &&
+              (window as any).RUNTIME_CONFIG?.ANDROID_LOCAL_FIRST
+                ? `/api/m3u8?url=${encodeURIComponent(url)}`
+                : url;
+            hls.loadSource(playbackUrl);
             hls.attachMedia(video);
             video.hls = hls;
 
-            ensureVideoSource(video, url);
+            ensureVideoSource(video, playbackUrl);
 
             // 启动前向预缓存。注意：这里只读取一次当前时间用于计算窗口起点，
             // 之后的预取循环不会再读取任何播放状态，因此暂停后仍会继续缓存。
@@ -3222,14 +3280,14 @@ export function usePlayEngine() {
           ...(isMoonTVAndroid
             ? [
                 {
-                  name: '应用服务地址',
-                  html: '应用服务地址',
+                  name: '账号与同步',
+                  html: '账号与同步',
                   tooltip: '修改',
                   icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M3 5h10v2H3V5Zm12 0h6v2h-6V5Zm-2-2h2v6h-2V3ZM3 11h2v2H3v-2Zm4 0h14v2H7v-2ZM5 9h2v6H5V9ZM3 17h10v2H3v-2Zm12 0h6v2h-6v-2Zm-2-2h2v6h-2v-6Z"/></svg>',
                   onClick() {
                     return postNativeAction('open-settings')
                       ? '已打开'
-                      : '应用服务尚未就绪';
+                      : '同步设置尚未就绪';
                   },
                 },
               ]

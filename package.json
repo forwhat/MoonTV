@@ -20,7 +20,8 @@
     "check:version": "node scripts/convert-changelog.js --check",
     "restore:sw": "node scripts/restore-sw.js",
     "prepare": "husky install",
-    "pages:build": "npx @cloudflare/next-on-pages"
+    "pages:build": "npx @cloudflare/next-on-pages",
+    "android:web:build": "node scripts/build-android-web.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -81,6 +82,7 @@
     "eslint-config-prettier": "^8.10.0",
     "eslint-plugin-simple-import-sort": "^7.0.0",
     "eslint-plugin-unused-imports": "^2.0.0",
+    "esbuild": "^0.25.4",
     "husky": "^7.0.4",
     "jest": "^27.5.1",
     "lint-staged": "^12.5.0",
