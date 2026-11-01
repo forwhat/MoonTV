@@ -10,6 +10,7 @@ import {
   getAllPlayRecords,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import { isDisplayablePlayRecord } from '@/lib/play-record';
 
 import ScrollableRow from '@/components/ScrollableRow';
 import VideoCard from '@/components/VideoCard';
@@ -20,7 +21,11 @@ interface ContinueWatchingProps {
   hideHeader?: boolean; // 是否隐藏标题栏
 }
 
-export default function ContinueWatching({ className, showAll = false, hideHeader = false }: ContinueWatchingProps) {
+export default function ContinueWatching({
+  className,
+  showAll = false,
+  hideHeader = false,
+}: ContinueWatchingProps) {
   const [playRecords, setPlayRecords] = useState<
     (PlayRecord & { key: string })[]
   >([]);
@@ -42,10 +47,12 @@ export default function ContinueWatching({ className, showAll = false, hideHeade
   // 处理播放记录数据更新的函数
   const updatePlayRecords = (allRecords: Record<string, PlayRecord>) => {
     // 将记录转换为数组并根据 save_time 由近到远排序
-    const recordsArray = Object.entries(allRecords).map(([key, record]) => ({
-      ...record,
-      key,
-    }));
+    const recordsArray = Object.entries(allRecords)
+      .filter(([, record]) => isDisplayablePlayRecord(record))
+      .map(([key, record]) => ({
+        ...record,
+        key,
+      }));
 
     // 按 save_time 降序排序（最新的在前面）
     const sortedRecords = recordsArray.sort(
@@ -138,7 +145,7 @@ export default function ContinueWatching({ className, showAll = false, hideHeade
           )}
         </div>
       )}
-      
+
       {isClient && (simpleMode || showAll) ? (
         // 简洁模式：使用网格布局，类似收藏夹
         <div className='justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8'>

@@ -25,6 +25,18 @@ import java.util.concurrent.TimeUnit
 internal fun isLocalMediaRequest(method: String, uri: String): Boolean =
     method == "GET" && uri in setOf("/api/m3u8", "/api/m3u8/proxy", "/api/image-proxy")
 
+internal fun requestBodyContentType(value: String?): String? {
+    val contentType = value?.trim()?.takeIf(String::isNotEmpty) ?: return null
+    val isJson = contentType.substringBefore(';').trim().let {
+        it.equals("application/json", ignoreCase = true) || it.endsWith("+json", ignoreCase = true)
+    }
+    return if (isJson && !contentType.contains("charset=", ignoreCase = true)) {
+        "$contentType; charset=UTF-8"
+    } else {
+        contentType
+    }
+}
+
 /**
  * APK 内部的 MoonTV 运行时。
  *
@@ -171,6 +183,10 @@ class LocalMoonServer(
         val body = when (session.method) {
             Method.GET, Method.HEAD -> null
             else -> {
+                requestBodyContentType(session.headers["content-type"])?.let {
+                    // NanoHTTPD otherwise decodes JSON without an explicit charset as US-ASCII.
+                    session.headers["content-type"] = it
+                }
                 val files = HashMap<String, String>()
                 session.parseBody(files)
                 files["postData"].orEmpty().toRequestBody(
