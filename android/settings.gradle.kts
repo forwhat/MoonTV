@@ -16,4 +16,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "MoonTVAndroid"
-include(":app")
+include(":app", ":tvapp")

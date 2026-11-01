@@ -68,3 +68,34 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - `DlnaController.kt`：项目内部的 DLNA 抽象。
 - `UpnpCastController.kt`：UPnPCast v1.3.0 适配实现。
 - `src/app/play/usePlayEngine.ts`：向 APK 提供当前媒体上下文，并接收电视端进度。
+
+## Android TV 版
+
+`tvapp` 是独立的电视安装包，包名为 `com.moontv.tv`。它直接加载 MoonTV
+网页，所以界面、登录、收藏和播放记录仍由原服务端提供；电视端只负责
+Leanback 启动入口、沉浸式全屏、遥控器焦点导航和播放器按键，不包含 DLNA。
+同时保留普通 Android 桌面入口，便于厂商电视桌面和平板侧载后直接找到应用。
+
+默认服务地址为 `https://moontv-58u.pages.dev`。在电视遥控器上按菜单键可以
+修改地址或清理网页缓存；页面加载失败时也可以从错误页修改。
+
+```bash
+cd android
+./gradlew :tvapp:assembleDebug
+```
+
+生成文件位于：
+
+```text
+android/tvapp/build/outputs/apk/debug/tvapp-debug.apk
+```
+
+安装到已开启调试的 Android TV：
+
+```bash
+adb install -r tvapp/build/outputs/apk/debug/tvapp-debug.apk
+```
+
+遥控器默认行为：方向键移动焦点；播放器获得焦点后，左右键快退/快进，
+确认键播放/暂停，上键进入或退出全屏，下键进入播放器控制栏。进入全屏后
+仍可使用相同按键；返回键优先退出全屏，然后返回上一页。
