@@ -17,16 +17,10 @@ class UpnpCastController(context: Context) : DlnaController {
     }
 
     override suspend fun discover(timeoutMs: Long): List<DlnaDevice> = withContext(Dispatchers.IO) {
-        val renderers = coroutineScope {
-            DLNACast.search(timeoutMs)
-                .map { device ->
-                    async {
-                        val isRenderer = device.isTV || DlnaRendererProbe.isRenderer(device.id)
-                        device.takeIf { isRenderer }
-                    }
-                }
-                .awaitAll()
-                .filterNotNull()
+        var renderers = discoverOnce(timeoutMs)
+        if (renderers.isEmpty()) {
+            delay(DISCOVERY_RETRY_DELAY_MS)
+            renderers = discoverOnce(DISCOVERY_RETRY_TIMEOUT_MS)
         }
         renderers
             .distinctBy { it.id }
@@ -38,27 +32,38 @@ class UpnpCastController(context: Context) : DlnaController {
         withContext(Dispatchers.IO) {
             DLNACast.clearProgressCache()
             val target = DLNACast.Device(device.id, device.name, device.address, device.isTv)
-            for ((index, profile) in DlnaCastProfiles.forUrl(media.url).withIndex()) {
-                if (index > 0) {
-                    runCatching { DLNACast.stop() }
-                    delay(COMPATIBILITY_RETRY_DELAY_MS)
-                }
-
-                val accepted = DLNACast.castToDevice(
-                    device = target,
-                    url = media.url,
-                    title = media.title,
-                    options = CastOptions(
-                        metadata = if (profile.emptyMetadata) "" else null,
-                        mimeType = profile.mimeType,
-                    ),
-                )
-                Log.i(TAG, "DLNA cast profile ${profile.name}: accepted=$accepted")
-                if (accepted) {
-                    if (media.positionMs > 1_000) {
-                        DLNACast.seek(media.positionMs)
+            var attemptIndex = 0
+            for (candidateUrl in HlsVariantResolver.candidates(media.url)) {
+                for (profile in DlnaCastProfiles.forUrl(candidateUrl)) {
+                    if (attemptIndex > 0) {
+                        runCatching { DLNACast.stop() }
+                        delay(COMPATIBILITY_RETRY_DELAY_MS)
                     }
-                    return@withContext true
+
+                    var accepted = DLNACast.castToDevice(
+                        device = target,
+                        url = candidateUrl,
+                        title = media.title,
+                        options = CastOptions(
+                            metadata = if (profile.emptyMetadata) "" else null,
+                            mimeType = profile.mimeType,
+                        ),
+                    )
+                    if (!accepted) {
+                        delay(DELAYED_PLAY_RETRY_MS)
+                        accepted = DLNACast.play()
+                    }
+                    Log.i(
+                        TAG,
+                        "DLNA cast attempt=$attemptIndex profile=${profile.name}: accepted=$accepted",
+                    )
+                    if (accepted) {
+                        if (media.positionMs > 1_000) {
+                            DLNACast.seek(media.positionMs)
+                        }
+                        return@withContext true
+                    }
+                    attemptIndex += 1
                 }
             }
             false
@@ -94,8 +99,23 @@ class UpnpCastController(context: Context) : DlnaController {
         DLNACast.cleanup()
     }
 
+    private suspend fun discoverOnce(timeoutMs: Long): List<DLNACast.Device> = coroutineScope {
+        DLNACast.search(timeoutMs)
+            .map { device ->
+                async {
+                    val isRenderer = device.isTV || DlnaRendererProbe.isRenderer(device.id)
+                    device.takeIf { isRenderer }
+                }
+            }
+            .awaitAll()
+            .filterNotNull()
+    }
+
     private companion object {
         const val TAG = "UpnpCastController"
         const val COMPATIBILITY_RETRY_DELAY_MS = 250L
+        const val DELAYED_PLAY_RETRY_MS = 1_000L
+        const val DISCOVERY_RETRY_DELAY_MS = 300L
+        const val DISCOVERY_RETRY_TIMEOUT_MS = 3_500L
     }
 }

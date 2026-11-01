@@ -9,6 +9,8 @@ import android.content.ServiceConnection
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -407,7 +409,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun beginDiscovery() {
+    private fun beginDiscovery(ignoreVpnWarning: Boolean = false) {
         val media = currentMedia
         if (media == null) {
             Toast.makeText(this, R.string.no_media, Toast.LENGTH_SHORT).show()
@@ -416,6 +418,15 @@ class MainActivity : AppCompatActivity() {
         val service = dlnaService
         if (service == null) {
             Toast.makeText(this, "投屏服务正在启动，请稍后重试", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!ignoreVpnWarning && isVpnActive()) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("检测到 VPN")
+                .setMessage("VPN 可能阻止局域网 DLNA 搜索。建议关闭 VPN 后再搜索电视。")
+                .setPositiveButton("仍然搜索") { _, _ -> beginDiscovery(ignoreVpnWarning = true) }
+                .setNegativeButton("取消", null)
+                .show()
             return
         }
         requestNotificationPermissionIfNeeded()
@@ -440,6 +451,13 @@ class MainActivity : AppCompatActivity() {
                 showError("搜索电视失败：${error.message ?: "未知错误"}")
             }
         }
+    }
+
+    private fun isVpnActive(): Boolean {
+        val manager = getSystemService(ConnectivityManager::class.java)
+        val activeNetwork = manager.activeNetwork ?: return false
+        return manager.getNetworkCapabilities(activeNetwork)
+            ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
     }
 
     private fun showDevicePicker(devices: List<DlnaDevice>, media: CastMedia) {
