@@ -10,7 +10,16 @@ import PlayClient from './PlayClient';
  */
 export default function PlayPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense
+      fallback={
+        <div className='flex min-h-screen items-center justify-center bg-slate-50 text-slate-600 dark:bg-slate-950 dark:text-slate-300'>
+          <div className='flex flex-col items-center gap-4'>
+            <div className='h-10 w-10 animate-spin rounded-full border-4 border-green-500/25 border-t-green-500' />
+            <p className='text-sm'>正在加载播放页...</p>
+          </div>
+        </div>
+      }
+    >
       <PlayClient />
     </Suspense>
   );
