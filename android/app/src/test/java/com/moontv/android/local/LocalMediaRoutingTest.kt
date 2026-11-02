@@ -41,4 +41,20 @@ class LocalMediaRoutingTest {
         )
         assertNull(requestBodyContentType(null))
     }
+
+    @Test
+    fun `only explicit streaming searches bypass the generic call timeout`() {
+        assertTrue(isStreamingSearchRequest("/api/search", "1"))
+        assertFalse(isStreamingSearchRequest("/api/search", null))
+        assertFalse(isStreamingSearchRequest("/api/search", ""))
+        assertFalse(isStreamingSearchRequest("/api/search", "0"))
+        assertFalse(isStreamingSearchRequest("/api/detail", "1"))
+    }
+
+    @Test
+    fun `overall search timeout covers all concurrency batches`() {
+        assertEquals(35L, searchOverallTimeoutSeconds(6, 30))
+        assertEquals(65L, searchOverallTimeoutSeconds(7, 30))
+        assertEquals(300L, searchOverallTimeoutSeconds(60, 60))
+    }
 }

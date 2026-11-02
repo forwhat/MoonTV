@@ -183,6 +183,10 @@ export async function GET(request: NextRequest) {
   (async () => {
     const failedSources: { name: string; key: string; error: string }[] = [];
 
+    // The client uses this deterministic order instead of network completion
+    // order, which changes from one refresh to the next.
+    await safeWrite({ sourceOrder: apiSites.map((site) => site.key) });
+
     const searchSite = async (site: ApiSite) => {
       try {
         const generator = searchFromApiStream(

@@ -37,6 +37,18 @@ internal fun requestBodyContentType(value: String?): String? {
     }
 }
 
+internal fun isStreamingSearchRequest(uri: String, streamParam: String?): Boolean =
+    uri == "/api/search" && !streamParam.isNullOrBlank() && streamParam != "0"
+
+internal fun searchOverallTimeoutSeconds(
+    sourceCount: Int,
+    perSourceTimeoutSeconds: Long,
+    concurrency: Int = 6,
+): Long {
+    val batches = ((sourceCount + concurrency - 1) / concurrency).coerceAtLeast(1)
+    return (perSourceTimeoutSeconds * batches + 5).coerceAtMost(300)
+}
+
 /**
  * APK 内部的 MoonTV 运行时。
  *
@@ -53,6 +65,10 @@ class LocalMoonServer(
         .readTimeout(20, TimeUnit.SECONDS)
         .callTimeout(25, TimeUnit.SECONDS)
         .followRedirects(true)
+        .build()
+    private val streamingHttp = http.newBuilder()
+        .readTimeout(75, TimeUnit.SECONDS)
+        .callTimeout(0, TimeUnit.SECONDS)
         .build()
     private val searchPool = Executors.newFixedThreadPool(6)
     private val responsePool = Executors.newCachedThreadPool()
@@ -199,7 +215,16 @@ class LocalMoonServer(
             session.headers[name]?.let { builder.header(name, it) }
         }
         builder.header("User-Agent", session.headers["user-agent"] ?: DESKTOP_USER_AGENT)
-        val upstream = http.newCall(builder.build()).execute()
+        val isStreamingSearch = isStreamingSearchRequest(
+            session.uri,
+            session.parameter("stream"),
+        )
+        // A streaming search has its own per-source timeout upstream. Applying
+        // the generic 25-second call timeout here truncates a valid partial
+        // stream and makes the source list depend on response timing.
+        val upstream = (if (isStreamingSearch) streamingHttp else http)
+            .newCall(builder.build())
+            .execute()
         val status = Response.Status.lookup(upstream.code) ?: Response.Status.INTERNAL_ERROR
         val responseBody = upstream.body
         val stream = object : FilterInputStream(
@@ -647,9 +672,13 @@ class LocalMoonServer(
         val output = PipedOutputStream(input)
         responsePool.execute {
             val completion = ExecutorCompletionService<SearchOutcome>(searchPool)
+            val timeoutSeconds = session.parameter("timeout")
+                .toLongOrNull()
+                ?.coerceIn(1, 60)
+                ?: 30L
             val futures = sources.map { source ->
                 completion.submit(Callable {
-                    runCatching { searchSource(source, query) }
+                    runCatching { searchSource(source, query, timeoutSeconds) }
                         .fold(
                             onSuccess = { SearchOutcome(source, it, null) },
                             onFailure = { SearchOutcome(source, null, it.message ?: "请求失败") },
@@ -660,7 +689,19 @@ class LocalMoonServer(
                 output.bufferedWriter(StandardCharsets.UTF_8).use { writer ->
                     val finished = mutableSetOf<String>()
                     val failures = JSONArray()
-                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+                    writer.append(
+                        JSONObject()
+                            .put("sourceOrder", JSONArray(sources.map { it.optString("key") }))
+                            .toString(),
+                    ).append('\n')
+                    writer.flush()
+                    val overallTimeoutSeconds = searchOverallTimeoutSeconds(
+                        sources.size,
+                        timeoutSeconds,
+                        SEARCH_CONCURRENCY,
+                    )
+                    val deadline = System.nanoTime() +
+                        TimeUnit.SECONDS.toNanos(overallTimeoutSeconds)
                     while (finished.size < sources.size) {
                         val remaining = deadline - System.nanoTime()
                         if (remaining <= 0) break
@@ -700,7 +741,11 @@ class LocalMoonServer(
         }
     }
 
-    private fun searchSource(source: JSONObject, query: String): JSONArray {
+    private fun searchSource(
+        source: JSONObject,
+        query: String,
+        timeoutSeconds: Long = 30,
+    ): JSONArray {
         val base = source.getString("api")
         val cacheKey = "search:${source.optString("key")}:$base:$query"
         getCached(cacheKey)?.let { return JSONArray(it) }
@@ -711,7 +756,9 @@ class LocalMoonServer(
             .header("Accept", "application/json")
             .header("User-Agent", DESKTOP_USER_AGENT)
             .build()
-        http.newCall(request).execute().use { response ->
+        streamingHttp.newCall(request).apply {
+            timeout().timeout(timeoutSeconds, TimeUnit.SECONDS)
+        }.execute().use { response ->
             if (!response.isSuccessful) error("HTTP ${response.code}")
             val root = JSONObject(response.body?.string().orEmpty())
             val items = root.optJSONArray("list") ?: return JSONArray()
@@ -1214,6 +1261,7 @@ class LocalMoonServer(
         private const val DESKTOP_USER_AGENT =
             "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/122.0.0.0 Mobile Safari/537.36"
         private const val STREAM_BUFFER_SIZE = 64 * 1024
+        private const val SEARCH_CONCURRENCY = 6
         private const val SEARCH_CACHE_TTL_MS = 5 * 60 * 1000L
         private const val DETAIL_CACHE_TTL_MS = 30 * 60 * 1000L
         private val YEAR = Regex("\\d{4}")
