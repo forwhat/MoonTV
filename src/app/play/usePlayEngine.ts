@@ -40,6 +40,11 @@ import {
   resolveLevelHeight,
   savePreferredQualityHeight,
 } from '@/lib/hls-quality';
+import {
+  isPlayableSearchResult,
+  mergePlaybackSource,
+  playbackSourceChanged,
+} from '@/lib/play-source';
 import { describeHlsError, PlaybackRecovery } from '@/lib/playback-recovery';
 import { getDefaultPlaybackSaveInterval } from '@/lib/playback-settings';
 import {
@@ -1328,18 +1333,37 @@ export function usePlayEngine() {
                     });
 
                   if (filteredResults.length > 0) {
-                    const newOnes = filteredResults.filter(
-                      (r) =>
-                        !aggregatedResults.some(
-                          (item) => item.source === r.source && item.id === r.id
-                        )
-                    );
+                    const changedResults: SearchResult[] = [];
+                    for (const result of filteredResults) {
+                      const existingIndex = aggregatedResults.findIndex(
+                        (item) =>
+                          item.source === result.source && item.id === result.id
+                      );
+                      if (existingIndex < 0) {
+                        aggregatedResults.push(result);
+                        changedResults.push(result);
+                        continue;
+                      }
 
-                    if (newOnes.length > 0) {
-                      aggregatedResults.push(...newOnes);
+                      const merged = mergePlaybackSource(
+                        aggregatedResults[existingIndex],
+                        result
+                      );
+                      if (
+                        playbackSourceChanged(
+                          aggregatedResults[existingIndex],
+                          merged
+                        )
+                      ) {
+                        aggregatedResults[existingIndex] = merged;
+                        changedResults.push(merged);
+                      }
+                    }
+
+                    if (changedResults.length > 0) {
                       setAvailableSources([...aggregatedResults]);
                       setSourceSearchLoading(false);
-                      onResult?.(newOnes);
+                      onResult?.(changedResults);
                     }
                   }
                 }
@@ -1353,9 +1377,12 @@ export function usePlayEngine() {
 
         return aggregatedResults;
       } catch (err) {
-        setSourceSearchError(err instanceof Error ? err.message : '搜索失败');
-        setAvailableSources([]);
-        return [];
+        if (aggregatedResults.length === 0) {
+          setSourceSearchError(err instanceof Error ? err.message : '搜索失败');
+        }
+        setAvailableSources([...aggregatedResults]);
+        setSourceSearchLoading(false);
+        return aggregatedResults;
       }
     };
 
@@ -1380,6 +1407,8 @@ export function usePlayEngine() {
 
       setCurrentSource(detailData.source);
       setCurrentId(detailData.id);
+      currentSourceRef.current = detailData.source;
+      currentIdRef.current = detailData.id;
       videoTitleRef.current = canonicalTitle;
       videoYearRef.current = canonicalYear;
       setVideoYear(canonicalYear);
@@ -1444,8 +1473,8 @@ export function usePlayEngine() {
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const result = (await response.json()) as SearchResult;
-        if (!result?.id || !result?.source || !Array.isArray(result.episodes)) {
-          throw new Error('视频详情格式无效');
+        if (!isPlayableSearchResult(result)) {
+          throw new Error('视频详情不完整');
         }
         return result;
       } catch (error) {
@@ -1494,9 +1523,24 @@ export function usePlayEngine() {
           allResults = [initializedDetail];
           setAvailableSources([initializedDetail]);
           hasInitialized = true;
-          void fetchSourcesData(initializedDetail.title, undefined, [
-            initializedDetail,
-          ]);
+          void fetchSourcesData(
+            initializedDetail.title,
+            (updates) => {
+              const refreshedCurrent = updates.find(
+                (item) =>
+                  item.source === initializedDetail.source &&
+                  item.id === initializedDetail.id
+              );
+              if (
+                refreshedCurrent &&
+                currentSourceRef.current === initializedDetail.source &&
+                currentIdRef.current === initializedDetail.id
+              ) {
+                initDetail(refreshedCurrent);
+              }
+            },
+            [initializedDetail]
+          );
           return;
         }
       }
