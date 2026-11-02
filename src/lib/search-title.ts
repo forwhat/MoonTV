@@ -47,6 +47,15 @@ export function resolveSearchYear(
   return normalizeSearchYear(candidate) || normalizeSearchYear(fallback);
 }
 
+/** Keep the first usable title when a detail endpoint omits `vod_name`. */
+export function resolvePlaybackTitle(...values: unknown[]): string {
+  for (const value of values) {
+    const title = typeof value === 'string' ? value.trim() : '';
+    if (title) return title;
+  }
+  return '';
+}
+
 // Common sentence punctuation and separators interpreted specially by upstream engines.
 const SEARCH_TITLE_SEPARATORS =
   /[().,!?;:#&|/~\\\u3002\uff0c\u3001\uff01\uff1f\uff1b\uff1a\uff03\uff06\uff5c\uff0f\uff3c\uff5e\u301c\u2026]/;

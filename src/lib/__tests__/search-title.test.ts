@@ -1,6 +1,7 @@
 import {
   matchesSearchYear,
   normalizeSearchYear,
+  resolvePlaybackTitle,
   resolveSearchYear,
 } from '../search-title';
 
@@ -23,5 +24,15 @@ describe('cross-source year matching', () => {
   it('preserves the canonical year across a source with missing metadata', () => {
     expect(resolveSearchYear('unknown', '2026')).toBe('2026');
     expect(resolveSearchYear('2025', '2026')).toBe('2025');
+  });
+});
+
+describe('playback title recovery', () => {
+  it('keeps the URL title when a detail response has an empty title', () => {
+    expect(resolvePlaybackTitle('', ' 择日飞升 ', 'fallback')).toBe('择日飞升');
+  });
+
+  it('prefers a usable title returned by the selected source', () => {
+    expect(resolvePlaybackTitle('仙逆', '旧标题')).toBe('仙逆');
   });
 });

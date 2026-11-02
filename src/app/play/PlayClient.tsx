@@ -61,6 +61,7 @@ export default function PlayClient() {
     playerHost,
     preview,
     isVideoLoading,
+    isWebFullscreen,
     videoLoadingStage,
     setLoading,
     setIsVideoLoading,
@@ -142,7 +143,11 @@ export default function PlayClient() {
             <div className='h-full md:col-span-3'>
               <div
                 className={`relative isolate w-full h-[300px] lg:h-full ${
-                  isPlayerModalOpen ? 'z-[1200]' : ''
+                  isWebFullscreen
+                    ? 'z-[2000]'
+                    : isPlayerModalOpen
+                    ? 'z-[1200]'
+                    : ''
                 }`}
               >
                 <div
@@ -240,7 +245,12 @@ export default function PlayClient() {
             </div>
 
             {/* 选集和换源 */}
-            <div className='h-[300px] border-t border-black/5 md:col-span-1 md:overflow-hidden md:border-l md:border-t-0 lg:h-full dark:border-white/10'>
+            <div
+              className={`h-[300px] border-t border-black/5 md:col-span-1 md:overflow-hidden md:border-l md:border-t-0 lg:h-full dark:border-white/10 ${
+                isWebFullscreen ? 'pointer-events-none invisible' : 'visible'
+              }`}
+              aria-hidden={isWebFullscreen}
+            >
               <EpisodeSelector
                 totalEpisodes={totalEpisodes}
                 episodes_titles={detail?.episodes_titles || []}
