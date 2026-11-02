@@ -267,11 +267,15 @@ export async function GET(request: NextRequest) {
     }
   })();
 
-  const cacheTime = await getCacheTime();
   return new Response(readable, {
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': `private, max-age=${cacheTime}`,
+      // Streaming responses are consumed incrementally and may be aborted when
+      // users navigate or refresh. Reusing a cached partial stream can leave
+      // the playback page with only the directly restored source.
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0',
     },
   });
 }

@@ -49,6 +49,7 @@ import {
 import {
   matchesFullSearchTitle,
   matchesSearchYear,
+  resolvePlaybackTitle,
   resolveSearchYear,
 } from '@/lib/search-title';
 import { SearchResult } from '@/lib/types';
@@ -700,6 +701,7 @@ export function usePlayEngine() {
 
   // 换源加载状态
   const [isVideoLoading, setIsVideoLoading] = useState(true);
+  const [isWebFullscreen, setIsWebFullscreen] = useState(false);
   const [videoLoadingStage, setVideoLoadingStage] = useState<
     'initing' | 'sourceChanging' | 'optimizing'
   >('initing');
@@ -1284,7 +1286,8 @@ export function usePlayEngine() {
         const response = await fetch(
           `/api/search?q=${encodeURIComponent(
             query.trim()
-          )}&timeout=${timeoutSeconds}&stream=1&concurrency=${searchConcurrency}`
+          )}&timeout=${timeoutSeconds}&stream=1&concurrency=${searchConcurrency}`,
+          { cache: 'no-store' }
         );
         if (!response.ok) throw new Error('搜索失败');
 
@@ -1360,19 +1363,27 @@ export function usePlayEngine() {
      * 初始化播放数据
      */
     function initDetail(detailData: SearchResult) {
+      const canonicalTitle = resolvePlaybackTitle(
+        detailData.title,
+        videoTitleRef.current,
+        searchTitle
+      );
       const canonicalYear = resolveSearchYear(
         detailData.year,
         videoYearRef.current
       );
-      const canonicalDetail = canonicalYear
-        ? { ...detailData, year: canonicalYear }
-        : detailData;
+      const canonicalDetail = {
+        ...detailData,
+        title: canonicalTitle,
+        ...(canonicalYear ? { year: canonicalYear } : {}),
+      };
 
       setCurrentSource(detailData.source);
       setCurrentId(detailData.id);
+      videoTitleRef.current = canonicalTitle;
       videoYearRef.current = canonicalYear;
       setVideoYear(canonicalYear);
-      setVideoTitle(detailData.title || videoTitleRef.current);
+      setVideoTitle(canonicalTitle);
       setVideoCover(detailData.poster);
       setVideoDoubanId(detailData.douban_id || 0);
       setDetail(canonicalDetail);
@@ -1404,13 +1415,18 @@ export function usePlayEngine() {
       } else {
         newUrl.searchParams.delete('year');
       }
-      newUrl.searchParams.set('title', detailData.title);
+      if (canonicalTitle) {
+        newUrl.searchParams.set('title', canonicalTitle);
+      } else {
+        newUrl.searchParams.delete('title');
+      }
       newUrl.searchParams.delete('prefer');
       window.history.replaceState({}, '', newUrl.toString());
 
       setLoadingStage('ready');
       setLoadingMessage('✨ 准备就绪，即将开始播放...');
       setTimeout(() => setLoading(false), 500);
+      return canonicalDetail;
     }
 
     const fetchDirectDetail = async (): Promise<SearchResult | null> => {
@@ -1473,16 +1489,14 @@ export function usePlayEngine() {
       if (currentSource && currentId && !enablePreferBestSourceFromStorage) {
         const directDetail = await fetchDirectDetail();
         if (directDetail) {
-          detailData = directDetail;
-          allResults = [directDetail];
-          setAvailableSources([directDetail]);
-          initDetail(directDetail);
+          const initializedDetail = initDetail(directDetail);
+          detailData = initializedDetail;
+          allResults = [initializedDetail];
+          setAvailableSources([initializedDetail]);
           hasInitialized = true;
-          void fetchSourcesData(
-            videoTitle || searchTitle || directDetail.title,
-            undefined,
-            [directDetail]
-          );
+          void fetchSourcesData(initializedDetail.title, undefined, [
+            initializedDetail,
+          ]);
           return;
         }
       }
@@ -1838,9 +1852,17 @@ export function usePlayEngine() {
         newDetail.year,
         videoYearRef.current
       );
-      const canonicalDetail = canonicalYear
-        ? { ...newDetail, year: canonicalYear }
-        : newDetail;
+      const canonicalTitle = resolvePlaybackTitle(
+        newDetail.title,
+        newTitle,
+        videoTitleRef.current,
+        searchTitle
+      );
+      const canonicalDetail = {
+        ...newDetail,
+        title: canonicalTitle,
+        ...(canonicalYear ? { year: canonicalYear } : {}),
+      };
 
       // 尝试跳转到当前正在播放的集数
       let targetIndex = currentEpisodeIndex;
@@ -1873,9 +1895,15 @@ export function usePlayEngine() {
       } else {
         newUrl.searchParams.delete('year');
       }
+      if (canonicalTitle) {
+        newUrl.searchParams.set('title', canonicalTitle);
+      } else {
+        newUrl.searchParams.delete('title');
+      }
       window.history.replaceState({}, '', newUrl.toString());
 
-      setVideoTitle(newDetail.title || newTitle);
+      videoTitleRef.current = canonicalTitle;
+      setVideoTitle(canonicalTitle);
       videoYearRef.current = canonicalYear;
       setVideoYear(canonicalYear);
       setVideoCover(newDetail.poster);
@@ -3439,6 +3467,10 @@ export function usePlayEngine() {
         }
       });
 
+      artPlayerRef.current.on('fullscreenWeb', (state: boolean) => {
+        setIsWebFullscreen(state);
+      });
+
       // 监听弹幕配置变化：同步到 ref（供重建播放器时恢复）并持久化到本地，
       // 使用户调整的弹幕设置（不透明度、字号、速度、显示区域等）刷新后依然生效。
       artPlayerRef.current.on(
@@ -4016,6 +4048,7 @@ export function usePlayEngine() {
     playerHost,
     preview,
     isVideoLoading,
+    isWebFullscreen,
     videoLoadingStage,
     setLoading,
     setIsVideoLoading,
