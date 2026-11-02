@@ -46,6 +46,15 @@ import {
   playbackSourceChanged,
   shouldSwitchPlaybackUrl,
 } from '@/lib/play-source';
+import {
+  buildPlaybackSourceCacheKey,
+  getPlaybackSourceCacheScope,
+  loadPlaybackSourceCache,
+  mergePlaybackSourceLists,
+  playbackSourceIdentity,
+  savePlaybackSourceCache,
+  sortPlaybackSources,
+} from '@/lib/play-source-cache';
 import { describeHlsError, PlaybackRecovery } from '@/lib/playback-recovery';
 import { getDefaultPlaybackSaveInterval } from '@/lib/playback-settings';
 import {
@@ -1276,6 +1285,17 @@ export function usePlayEngine() {
 
   // 进入页面时直接获取全部源信息
   useEffect(() => {
+    const sourceSearchQuery = (videoTitle || searchTitle).trim();
+    const sourceCacheKey = buildPlaybackSourceCacheKey({
+      scope: getPlaybackSourceCacheScope(),
+      query: sourceSearchQuery,
+      year: videoYearRef.current,
+      type: searchType,
+    });
+    const cachedSourceSnapshot = loadPlaybackSourceCache(sourceCacheKey);
+    let configuredSourceOrder = cachedSourceSnapshot.sourceOrder;
+    const freshSourceIdentities = new Set<string>();
+
     const fetchSourcesData = async (
       query: string,
       onResult?: (results: SearchResult[]) => void,
@@ -1284,7 +1304,10 @@ export function usePlayEngine() {
       setSourceSearchLoading(true);
       setSourceSearchError('');
 
-      const aggregatedResults: SearchResult[] = [...seedResults];
+      let aggregatedResults: SearchResult[] = sortPlaybackSources(
+        [...seedResults],
+        configuredSourceOrder
+      );
       const targetYear = videoYearRef.current;
 
       try {
@@ -1322,7 +1345,20 @@ export function usePlayEngine() {
               try {
                 const data = JSON.parse(line) as {
                   pageResults?: SearchResult[];
+                  sourceOrder?: string[];
                 };
+                if (Array.isArray(data.sourceOrder)) {
+                  configuredSourceOrder = data.sourceOrder.filter(
+                    (key): key is string => typeof key === 'string' && !!key
+                  );
+                  aggregatedResults = sortPlaybackSources(
+                    aggregatedResults,
+                    configuredSourceOrder
+                  );
+                  if (aggregatedResults.length > 0) {
+                    setAvailableSources([...aggregatedResults]);
+                  }
+                }
                 if (data.pageResults) {
                   const filteredResults: SearchResult[] =
                     data.pageResults.filter((r: SearchResult) => {
@@ -1338,6 +1374,9 @@ export function usePlayEngine() {
                   if (filteredResults.length > 0) {
                     const changedResults: SearchResult[] = [];
                     for (const result of filteredResults) {
+                      const identity = playbackSourceIdentity(result);
+                      const alreadyFresh = freshSourceIdentities.has(identity);
+                      freshSourceIdentities.add(identity);
                       const existingIndex = aggregatedResults.findIndex(
                         (item) =>
                           item.source === result.source && item.id === result.id
@@ -1348,10 +1387,15 @@ export function usePlayEngine() {
                         continue;
                       }
 
-                      const merged = mergePlaybackSource(
-                        aggregatedResults[existingIndex],
-                        result
-                      );
+                      const merged = alreadyFresh
+                        ? mergePlaybackSource(
+                            aggregatedResults[existingIndex],
+                            result
+                          )
+                        : mergePlaybackSourceLists(
+                            [aggregatedResults[existingIndex]],
+                            [result]
+                          )[0];
                       if (
                         playbackSourceChanged(
                           aggregatedResults[existingIndex],
@@ -1362,6 +1406,11 @@ export function usePlayEngine() {
                         changedResults.push(merged);
                       }
                     }
+
+                    aggregatedResults = sortPlaybackSources(
+                      aggregatedResults,
+                      configuredSourceOrder
+                    );
 
                     if (changedResults.length > 0) {
                       setAvailableSources([...aggregatedResults]);
@@ -1377,6 +1426,12 @@ export function usePlayEngine() {
           }
         }
         setSourceSearchLoading(false);
+        savePlaybackSourceCache(
+          sourceCacheKey,
+          aggregatedResults,
+          freshSourceIdentities,
+          configuredSourceOrder
+        );
 
         return aggregatedResults;
       } catch (err) {
@@ -1385,6 +1440,12 @@ export function usePlayEngine() {
         }
         setAvailableSources([...aggregatedResults]);
         setSourceSearchLoading(false);
+        savePlaybackSourceCache(
+          sourceCacheKey,
+          aggregatedResults,
+          freshSourceIdentities,
+          configuredSourceOrder
+        );
         return aggregatedResults;
       }
     };
@@ -1522,16 +1583,24 @@ export function usePlayEngine() {
       })();
 
       let detailData: SearchResult | null = null;
-      let allResults: SearchResult[] = [];
+      let allResults: SearchResult[] = [...cachedSourceSnapshot.results];
       let hasInitialized = false; // 标记是否已经初始化过播放数据
+
+      if (allResults.length > 0) {
+        setAvailableSources(allResults);
+      }
 
       if (currentSource && currentId && !enablePreferBestSourceFromStorage) {
         const directDetail = await fetchDirectDetail();
         if (directDetail) {
           const initializedDetail = initDetail(directDetail);
+          freshSourceIdentities.add(playbackSourceIdentity(initializedDetail));
           detailData = initializedDetail;
-          allResults = [initializedDetail];
-          setAvailableSources([initializedDetail]);
+          allResults = sortPlaybackSources(
+            mergePlaybackSourceLists(allResults, [initializedDetail]),
+            configuredSourceOrder
+          );
+          setAvailableSources(allResults);
           hasInitialized = true;
           void fetchSourcesData(
             initializedDetail.title,
@@ -1549,43 +1618,95 @@ export function usePlayEngine() {
                 initDetail(refreshedCurrent);
               }
             },
-            [initializedDetail]
+            allResults
           );
           return;
         }
       }
 
-      await fetchSourcesData(videoTitle || searchTitle, (newResults) => {
-        allResults = [...allResults, ...newResults];
-
-        // 如果还没确定 detailData，就尝试找目标源
-        if (!detailData && currentSource && currentId) {
-          const match = newResults.find(
-            (item) => item.source === currentSource && item.id === currentId
-          );
-          if (match) {
-            detailData = match;
-            // 如果未启用优选，立即初始化播放数据
-            if (!enablePreferBestSourceFromStorage) {
-              initDetail(detailData);
-              hasInitialized = true;
-            }
-            // 如果启用优选，则等待所有源收集完再决定是否优选
+      // A cached playable result is preferable to waiting for every upstream
+      // source again after the direct detail request failed.
+      if (!detailData && allResults.length > 0) {
+        const requestedEpisode = Number(
+          new URLSearchParams(window.location.search).get('ep')
+        );
+        const requestedIndex =
+          Number.isInteger(requestedEpisode) && requestedEpisode >= 1
+            ? requestedEpisode - 1
+            : currentEpisodeIndexRef.current;
+        const cachedTarget = currentSource
+          ? allResults.find(
+              (item) =>
+                item.source === currentSource &&
+                item.id === currentId &&
+                isPlayableSearchResult(item, requestedIndex)
+            )
+          : allResults.find((item) =>
+              isPlayableSearchResult(item, requestedIndex)
+            );
+        if (cachedTarget) {
+          detailData = cachedTarget;
+          if (!enablePreferBestSourceFromStorage) {
+            initDetail(cachedTarget);
+            hasInitialized = true;
           }
         }
+      }
 
-        if (
-          !detailData &&
-          !currentSource &&
-          !currentId &&
-          !enablePreferBestSourceFromStorage &&
-          newResults.length > 0
-        ) {
-          detailData = newResults[0];
-          initDetail(detailData);
-          hasInitialized = true;
-        }
-      });
+      await fetchSourcesData(
+        sourceSearchQuery,
+        (newResults) => {
+          allResults = sortPlaybackSources(
+            mergePlaybackSourceLists(allResults, newResults),
+            configuredSourceOrder
+          );
+
+          if (detailData && currentSource && currentId) {
+            const refreshedCurrent = newResults.find(
+              (item) => item.source === currentSource && item.id === currentId
+            );
+            if (refreshedCurrent) {
+              detailData = mergePlaybackSource(detailData, refreshedCurrent);
+              if (
+                hasInitialized &&
+                currentSourceRef.current === currentSource &&
+                currentIdRef.current === currentId
+              ) {
+                initDetail(detailData);
+              }
+            }
+          }
+
+          // 如果还没确定 detailData，就尝试找目标源
+          if (!detailData && currentSource && currentId) {
+            const match = newResults.find(
+              (item) => item.source === currentSource && item.id === currentId
+            );
+            if (match) {
+              detailData = match;
+              // 如果未启用优选，立即初始化播放数据
+              if (!enablePreferBestSourceFromStorage) {
+                initDetail(detailData);
+                hasInitialized = true;
+              }
+              // 如果启用优选，则等待所有源收集完再决定是否优选
+            }
+          }
+
+          if (
+            !detailData &&
+            !currentSource &&
+            !currentId &&
+            !enablePreferBestSourceFromStorage &&
+            newResults.length > 0
+          ) {
+            detailData = newResults[0];
+            initDetail(detailData);
+            hasInitialized = true;
+          }
+        },
+        allResults
+      );
 
       // 流式搜索结束：如果目标源没找到，就 fallback
       if (!detailData && allResults.length > 0) {
