@@ -44,6 +44,7 @@ import {
   isPlayableSearchResult,
   mergePlaybackSource,
   playbackSourceChanged,
+  shouldSwitchPlaybackUrl,
 } from '@/lib/play-source';
 import { describeHlsError, PlaybackRecovery } from '@/lib/playback-recovery';
 import { getDefaultPlaybackSaveInterval } from '@/lib/playback-settings';
@@ -716,6 +717,7 @@ export function usePlayEngine() {
   const lastSaveTimeRef = useRef<number>(0);
 
   const artPlayerRef = useRef<any>(null);
+  const playerLoadedUrlRef = useRef('');
   const artRef = useRef<HTMLDivElement | null>(null);
   /** ArtPlayer 根节点，供把返回/标题 portal 进播放器（全屏也能看见） */
   const [playerHost, setPlayerHost] = useState<HTMLElement | null>(null);
@@ -1129,6 +1131,7 @@ export function usePlayEngine() {
     // 先取消待执行的退避重试，避免定时器醒来后操作已销毁的 hls 实例
     recoveryRef.current?.dispose();
     recoveryRef.current = null;
+    playerLoadedUrlRef.current = '';
     setPlayerHost(null);
 
     if (artPlayerRef.current) {
@@ -1473,7 +1476,14 @@ export function usePlayEngine() {
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const result = (await response.json()) as SearchResult;
-        if (!isPlayableSearchResult(result)) {
+        const requestedEpisode = Number(
+          new URLSearchParams(window.location.search).get('ep')
+        );
+        const requestedIndex =
+          Number.isInteger(requestedEpisode) && requestedEpisode >= 1
+            ? requestedEpisode - 1
+            : currentEpisodeIndexRef.current;
+        if (!isPlayableSearchResult(result, requestedIndex)) {
           throw new Error('视频详情不完整');
         }
         return result;
@@ -2461,8 +2471,22 @@ export function usePlayEngine() {
       typeof window !== 'undefined' &&
       typeof (window as any).webkitConvertPointFromNodeToPage === 'function';
 
+    // Metadata enrichment updates `detail`, but it must not reload an already
+    // playing URL. ArtPlayer.switch resets currentTime even for the same URL.
+    if (
+      artPlayerRef.current &&
+      !shouldSwitchPlaybackUrl(playerLoadedUrlRef.current, videoUrl)
+    ) {
+      artPlayerRef.current.title = `${videoTitle} - 第${
+        currentEpisodeIndex + 1
+      }集`;
+      artPlayerRef.current.poster = processImageUrl(videoCover);
+      return;
+    }
+
     // 切集时无论浏览器类型都优先复用实例，避免销毁播放器
     if (artPlayerRef.current && isEpisodeSwitchingRef.current) {
+      playerLoadedUrlRef.current = videoUrl;
       artPlayerRef.current.switch = videoUrl;
       artPlayerRef.current.title = `${videoTitle} - 第${
         currentEpisodeIndex + 1
@@ -2480,6 +2504,7 @@ export function usePlayEngine() {
 
     // 非WebKit浏览器且播放器已存在，使用switch方法切换
     if (!isWebkit && artPlayerRef.current) {
+      playerLoadedUrlRef.current = videoUrl;
       artPlayerRef.current.switch = videoUrl;
       artPlayerRef.current.title = `${videoTitle} - 第${
         currentEpisodeIndex + 1
@@ -3443,6 +3468,7 @@ export function usePlayEngine() {
             : []),
         ],
       });
+      playerLoadedUrlRef.current = videoUrl;
 
       // 移动端手势反馈（双击快退/快进、全屏竖滑音量/亮度）与拖动共用一套状态机
       const gestures = bindMobileGestures(artPlayerRef.current);

@@ -2,6 +2,7 @@ import {
   isPlayableSearchResult,
   mergePlaybackSource,
   playbackSourceChanged,
+  shouldSwitchPlaybackUrl,
 } from '../play-source';
 import type { SearchResult } from '../types';
 
@@ -30,6 +31,11 @@ describe('play source recovery', () => {
     expect(isPlayableSearchResult(complete)).toBe(true);
   });
 
+  it('requires the requested history episode to exist', () => {
+    expect(isPlayableSearchResult(complete, 0)).toBe(true);
+    expect(isPlayableSearchResult(complete, 3)).toBe(false);
+  });
+
   it('lets a complete search result repair the same partial source', () => {
     const merged = mergePlaybackSource(partial, complete);
     expect(merged.poster).toBe(complete.poster);
@@ -43,5 +49,31 @@ describe('play source recovery', () => {
     expect(merged.poster).toBe(complete.poster);
     expect(merged.episodes).toEqual(complete.episodes);
     expect(merged.desc).toBe(complete.desc);
+  });
+
+  it('keeps the loaded episode URL while appending newly discovered episodes', () => {
+    const current = {
+      ...complete,
+      episodes: ['https://detail.example/1.m3u8'],
+    };
+    const incoming = {
+      ...complete,
+      episodes: [
+        'https://search.example/1.m3u8',
+        'https://search.example/2.m3u8',
+      ],
+    };
+    expect(mergePlaybackSource(current, incoming).episodes).toEqual([
+      'https://detail.example/1.m3u8',
+      'https://search.example/2.m3u8',
+    ]);
+  });
+
+  it('does not switch the player when only metadata changed', () => {
+    const url = 'https://example.com/1.m3u8';
+    expect(shouldSwitchPlaybackUrl(url, url)).toBe(false);
+    expect(shouldSwitchPlaybackUrl(url, 'https://example.com/2.m3u8')).toBe(
+      true
+    );
   });
 });
